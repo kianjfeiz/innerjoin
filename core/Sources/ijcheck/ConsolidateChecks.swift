@@ -38,8 +38,13 @@ private func kindsDontCross() async throws {
         let ingest = Ingest(store: store)
         let lease = try await ingest.add(fileAt: try fixture("lease.pdf"))
 
-        // Same name, different kinds. A company named after its founder is still not
-        // the founder.
+        // Same name, different kinds. This once asserted the two stayed separate, on the
+        // reasoning that a company named after its founder is not the founder. Real runs
+        // overruled it: the model labels one organization `org`, then `place`, then
+        // `person` across three documents, and each label minted another node — so the
+        // documents that should have clustered together didn't, and a third of the
+        // library sat unfiled. One name is now one node. The cost is a dossier that can
+        // merge a founder with their company; the benefit is a graph that connects.
         let provider = ScriptedProvider(json: """
         {"title":"t","summary":"s","fields":[],"dates":[],
          "entities":[{"name":"M. Osei","kind":"person","relation":"party_to"},
@@ -49,7 +54,21 @@ private func kindsDontCross() async throws {
             .understand(documentID: try require(lease.document.id, "id"))
         _ = try await Consolidate(store: store).run()
 
-        await expectEqual(try store.entities().count, 2, "the person and the company stay separate")
+        await expectEqual(try store.entities().count, 1, "one name is one node, whatever it's labelled")
+
+        // Everything else with one name is one thing. Measured, not assumed: a real run
+        // stored Chen Clinic, State Farm and PG&E twice each because the model called
+        // them `org` on one document and `place` on the next, and the documents that
+        // should have clustered together didn't.
+        let second = try await ingest.add(fileAt: try fixture("receipt.png"))
+        let asPlace = ScriptedProvider(json: """
+        {"title":"t","summary":"s","fields":[],"dates":[],
+         "entities":[{"name":"M. Osei","kind":"place","relation":"located_at"}]}
+        """)
+        _ = try await Distill(store: store, provider: asPlace)
+            .understand(documentID: try require(second.document.id, "id"))
+        await expectEqual(try store.entities().count, 1,
+                          "and a later, different label doesn't mint another")
     }
 }
 
@@ -134,4 +153,44 @@ private func formattingIsNotConflict() async throws {
                       "case and spacing are ignored")
     await expect(Consolidate.comparable("1 month") != Consolidate.comparable("2 months"),
                  "a real difference still reads as different")
+}
+
+/// From a real run: the same organization stored twice because the model labelled it
+/// differently on two documents, which quietly severed the link between them.
+func entityIdentityChecks() async {
+    print("\nEntities · one thing, one node")
+    await check("the same name under two kinds is one entity", sameNameOneEntity)
+}
+
+private func sameNameOneEntity() async throws {
+    try await withWorkspace { store in
+        let folder = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ij-id-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let ingest = Ingest(store: store)
+        for (index, kind) in ["org", "place"].enumerated() {
+            let file = folder.appendingPathComponent("visit\(index).md")
+            try "# Visit \(index)\n\nSeen at Chen Clinic today.".write(to: file, atomically: true,
+                                                                     encoding: .utf8)
+            let added = try await ingest.add(fileAt: file)
+            let provider = ScriptedProvider(json: """
+            {"title":"Visit \(index)","summary":"s","fields":[],"dates":[],
+             "entities":[{"name":"Chen Clinic","kind":"\(kind)","relation":"party_to"}]}
+            """)
+            _ = try await Distill(store: store, provider: provider)
+                .understand(documentID: try require(added.document.id, "id"))
+        }
+
+        let clinics = try store.entities(limit: 50).filter { $0.name == "Chen Clinic" }
+        await expectEqual(clinics.count, 1,
+                          "a clinic called an org once and a place once is still one clinic")
+
+        // The point isn't tidiness — it's that both documents now hang off the same node,
+        // which is what lets them cluster together at all.
+        let entityID = try require(clinics.first?.id, "the entity")
+        await expectEqual(try store.records(linkedTo: entityID).count, 2,
+                          "so both documents are tied to it")
+    }
 }

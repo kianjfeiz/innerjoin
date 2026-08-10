@@ -169,10 +169,14 @@ public enum Naming {
                 return !subjectKey.contains(key) && !key.contains(subjectKey)
             }
             .sorted { left, right in
-                let leftRelation = relationRank(left.relation), rightRelation = relationRank(right.relation)
-                if leftRelation != rightRelation { return leftRelation < rightRelation }
+                // Who before where. A real run produced "Notice of Rent Adjustment —
+                // 1247 Fillmore St, Apt 4, San Francisco, CA": the address is a party to
+                // the notice, but nobody calls a document by its address when there's a
+                // landlord's name available.
                 let leftKind = kindRank(left.kind) ?? 9, rightKind = kindRank(right.kind) ?? 9
                 if leftKind != rightKind { return leftKind < rightKind }
+                let leftRelation = relationRank(left.relation), rightRelation = relationRank(right.relation)
+                if leftRelation != rightRelation { return leftRelation < rightRelation }
                 if left.confidence != right.confidence { return left.confidence > right.confidence }
                 return left.name < right.name   // ties broken by name, so the answer is stable
             }

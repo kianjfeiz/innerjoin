@@ -28,10 +28,23 @@ enum Prompt {
 
     static func system(_ learned: Learned) -> String {
         let categories = learned.categories
+        // A real run proposed "spending_report" and "Itinerarys" as categories, and the
+        // library ended up filed by document type rather than by what the documents are
+        // about. `kind` already carries the document type; `category` is the shelf a
+        // person would keep it on, and there are only ever a handful of those.
         let known = categories.isEmpty
-            ? "There are no categories yet — propose the one that fits."
+            ? """
+              There are no categories yet. Propose the area of life this belongs to — \
+              the shelf someone would keep it on, like Apartment, Health, Travel, \
+              Vehicle, Taxes, Work, Supplies. One or two plain words. Never a document \
+              type: "Invoice", "Itinerary" and "spending_report" are kinds, not areas.
+              """
             : "Categories in use: " + categories.joined(separator: ", ") +
-              ". Reuse one of these when it fits; propose a new one only when none does."
+              """
+              . Reuse one of these when it fits — that is almost always the right answer. \
+              Propose a new one only when the document belongs to a genuinely different \
+              area of life, and then make it an area, not a document type.
+              """
 
         var learnedBlock = ""
         if !learned.fieldNames.isEmpty {
@@ -76,6 +89,12 @@ enum Prompt {
         not every name that appears in it. A named party, yes. The city it was signed \
         in, the bank in the footer, the notary, a job title like "Tenant" — no. Most \
         documents have between one and five. Returning more is usually a mistake.
+        - Nobody in a signature or filing block is a party. A notary, a witness, a \
+        recording clerk, a title or escrow company, an agent, a preparer — these \
+        processed the paperwork, they are not who it is between. A real run named a \
+        title company as a party to a deed; it is not one.
+        - Copy names as the document writes them, in the same case. Do not shout a name \
+        that the document sets in capitals for design reasons.
         - If the document states a notice period in days, put the number in \
         `notice_days`. Do not calculate the deadline; that is done for you.\(learnedBlock)
         """

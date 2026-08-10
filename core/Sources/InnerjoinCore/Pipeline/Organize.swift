@@ -33,6 +33,13 @@ public struct Organize: Sendable {
     static let hubMinimumRecords = 5
     static let hubMinimumReach = 3
 
+    /// How many different areas of life an entity has to touch before it stops telling
+    /// you anything about where a document belongs. Three, because two areas genuinely
+    /// overlap — a landlord can be on both the lease and a utility bill — but a name on
+    /// documents from three unrelated parts of a life is the person themselves, or their
+    /// bank, or their city.
+    static let hubMinimumAreas = 3
+
     /// How many *distinct* entities must tie a record to a group before it joins.
     ///
     /// Held at 1 deliberately, after measuring both. Requiring two makes categories
@@ -114,7 +121,7 @@ public struct Organize: Sendable {
 
     /// Two records are neighbours when they're about the same entity, weighted by how
     /// many they share. Hub entities are left out entirely.
-    func neighbours(of records: [Record]) throws
+    public func neighbours(of records: [Record]) throws
         -> (adjacency: [Int64: [Int64: Int]], entities: [Int64: Set<Int64>], hubs: [String])
     {
         let total = records.count
@@ -131,19 +138,44 @@ public struct Organize: Sendable {
                 GROUP BY entity.id
                 """)
 
+            // What each record was read as, for the spread test below.
+            let hintOf = Dictionary(
+                records.compactMap { record -> (Int64, String)? in
+                    guard let id = record.id,
+                          let hint = (record.categoryHint ?? record.category)?.trimmed.nilIfEmpty,
+                          hint != Self.holdingCategory else { return nil }
+                    return (id, hint)
+                }, uniquingKeysWith: { first, _ in first })
+
             for row in rows {
                 let reach = row["reach"] as Int? ?? 0
                 guard reach > 1 else { continue }
-                if total >= Self.hubMinimumRecords, reach >= Self.hubMinimumReach,
-                   Double(reach) / Double(total) > Self.hubShare {
-                    hubs.append(row["name"] as String? ?? "?")
-                    continue
-                }
                 let entityID = row["entityID"] as Int64? ?? 0
                 let attached = try Int64.fetchAll(db, sql: """
                     SELECT CAST(SUBSTR(src, 8) AS INTEGER) FROM link
                     WHERE dst = ? AND src LIKE 'record:%'
                     """, arguments: ["entity:\(entityID)"])
+
+                if total >= Self.hubMinimumRecords, reach >= Self.hubMinimumReach {
+                    // Two ways to be uninformative. Touching most of the library is one.
+                    let ubiquitous = Double(reach) / Double(total) > Self.hubShare
+
+                    // The other is subtler and share alone can't see it. In a personal
+                    // library the owner's own name is on the lease, the invoice, the
+                    // policy and the boarding pass — nine documents out of twenty-five,
+                    // exactly like the main supplier. What separates them is *spread*:
+                    // the supplier's documents are all one kind of thing, the owner's
+                    // are every kind. An entity scattered across unrelated areas of a
+                    // life says nothing about where any of them belong, and left in the
+                    // graph it welds the whole library into a single category.
+                    let spread = Set(attached.compactMap { hintOf[$0] })
+                    let indiscriminate = spread.count >= Self.hubMinimumAreas
+
+                    if ubiquitous || indiscriminate {
+                        hubs.append(row["name"] as String? ?? "?")
+                        continue
+                    }
+                }
 
                 for a in attached {
                     entitiesByRecord[a, default: []].insert(entityID)
@@ -204,14 +236,27 @@ public struct Organize: Sendable {
     /// looked like; here those independent guesses are counted, so the graph decides
     /// membership and the model's opinions decide the label — with no extra call.
     static func name(for group: [Record]) -> String {
-        let hints = group.compactMap { $0.category?.trimmed.nilIfEmpty }
+        // The model's own reading, never our previous conclusion.
+        let hints = group.compactMap { ($0.categoryHint ?? $0.category)?.trimmed.nilIfEmpty }
             .filter { $0 != holdingCategory }
-        if let winner = mostCommon(hints) { return winner }
 
-        // No usable hints — fall back to what the documents *are*.
-        if let kind = mostCommon(group.compactMap { $0.kind?.trimmed.nilIfEmpty }) {
+        // A vote of one isn't a vote. A real run named a cluster of thirteen documents
+        // "spending_report" because a single spreadsheet said so and nothing else
+        // agreed — one document's opinion became the name of most of the library.
+        // Above a handful of members, a name has to be seconded.
+        let needsSeconding = group.count >= 3
+        if let winner = mostCommon(hints),
+           !needsSeconding || hints.filter({ $0 == winner }).count >= 2 {
+            return winner
+        }
+
+        // No agreement — fall back to what the documents *are*, under the same rule.
+        let kinds = group.compactMap { $0.kind?.trimmed.nilIfEmpty }
+        if let kind = mostCommon(kinds),
+           !needsSeconding || kinds.filter({ $0 == kind }).count >= 2 {
             return kind.capitalizedFirst + "s"
         }
+        // Better an honest holding pen than a confident wrong shelf.
         return holdingCategory
     }
 

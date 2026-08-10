@@ -106,8 +106,9 @@ public struct Distill: Sendable {
         // Every cited tag must exist on this document. A model that invents "e99"
         // would otherwise produce a citation that can't be opened.
         func resolve(_ tag: String?) -> Element? {
-            guard let tag else { return nil }
-            guard let element = byTag[tag] else { dropped += 1; return nil }
+            guard let cited = tag?.trimmed, !cited.isEmpty else { return nil }
+            guard let normalized = Element.normalizeTag(cited) else { dropped += 1; return nil }
+            guard let element = byTag[normalized] else { dropped += 1; return nil }
             return element
         }
 
@@ -123,8 +124,9 @@ public struct Distill: Sendable {
         var record = Record(
             documentID: documentID,
             kind: reply.kind,
-            title: reply.title.trimmed.isEmpty ? document.name : reply.title.trimmed,
-            summary: reply.summary,
+            title: Element.stripTags(reply.title).isEmpty
+                ? document.name : Element.stripTags(reply.title),
+            summary: reply.summary.map(Element.stripTags),
             category: reply.category?.trimmed,
             happenedOn: reply.happenedOn.flatMap(Dates.parse),
             amount: reply.amount,
@@ -226,15 +228,39 @@ public struct Distill: Sendable {
         for candidate in candidates {
             let normalized = Entity.normalize(candidate.name)
             let entityID = try await store.dbQueue.write { db -> Int64? in
-                if var existing = try Entity
-                    .filter(Entity.Columns.normName == normalized
-                            && Entity.Columns.kind == candidate.kind.rawValue)
-                    .fetchOne(db)
-                {
+                // Matched on the name, and only loosely on the kind.
+                //
+                // A real run produced "Chen Clinic ×1 | Chen Clinic ×1", and the same
+                // for State Farm and PG&E: the model called an organization an `org` on
+                // one document and a `place` on the next, so each became two nodes and
+                // the documents that should have been tied together weren't — which is
+                // also why a third of the library wouldn't cluster. A clinic is one
+                // clinic whatever we label it.
+                // Name alone, kind ignored. I tried keeping people separate — a company
+                // named after its founder is not the founder — but the next run still
+                // showed "Eye Care of East Bay" twice, because the model had called it a
+                // person once. The hypothetical cost of merging a founder with their
+                // company is one slightly wide dossier; the measured cost of not merging
+                // is a severed graph, and with it a third of the library unfiled.
+                let sameName = try Entity
+                    .filter(Entity.Columns.normName == normalized)
+                    .order(Entity.Columns.id)
+                    .fetchAll(db)
+                let match = sameName.first { $0.kind == candidate.kind } ?? sameName.first
+
+                if var existing = match {
+                    var changed = false
+                    // Keep whichever kind is more specific: an early "other" shouldn't
+                    // outrank a later, better-informed reading.
+                    if existing.kind == .other, candidate.kind != .other {
+                        existing.kind = candidate.kind
+                        changed = true
+                    }
                     if existing.name != candidate.name, !existing.aliases.contains(candidate.name) {
                         existing.aliases.append(candidate.name)
-                        try existing.update(db)
+                        changed = true
                     }
+                    if changed { try existing.update(db) }
                     return existing.id
                 }
                 var fresh = Entity(name: candidate.name, kind: candidate.kind)
@@ -282,7 +308,7 @@ public enum DistillError: LocalizedError {
 
 // MARK: - Dates
 
-enum Dates {
+public enum Dates {
     /// Accepts what models actually emit, in order of likelihood.
     static func parse(_ text: String?) -> Date? {
         guard let text = text?.trimmed, !text.isEmpty else { return nil }
@@ -296,6 +322,15 @@ enum Dates {
             if let date = formatter.date(from: text) { return date }
         }
         return nil
+    }
+
+    /// The strict form only, for when a caller needs to know it really is a date.
+    public static func parseISO(_ text: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: text)
     }
 
     /// Guards against a misparse turning into a bogus deadline in someone's briefing.

@@ -156,3 +156,55 @@ private func stableAcrossRuns() async throws {
         await expectEqual(first, second, "running twice gives the same answer")
     }
 }
+
+/// Found by a real run: clustering was reading back its own previous answer as if it
+/// were the model's independent opinion.
+func categoryEvidenceChecks() async {
+    print("\nCategories · the evidence outlives the conclusion")
+    await check("clustering never overwrites the model's own guess", hintSurvivesClustering)
+    await check("a category needs more than one document's say-so", oneVoteIsNotAVote)
+}
+
+private func hintSurvivesClustering() async throws {
+    try await withWorkspace { store in
+        try await seed(store, documents: [
+            ("t1", "Flight.",   "Travel", ["Skyline Air"]),
+            ("t2", "Hotel.",    "Travel", ["Skyline Air"]),
+            ("t3", "Car hire.", "Travel", ["Skyline Air"]),
+        ])
+        // Before clustering, the guess and the filing are the same thing.
+        let before = try store.records(limit: 10)
+        await expect(before.allSatisfy { $0.categoryHint == "Travel" }, "each document's guess is stored")
+
+        _ = try await InnerjoinCore.Organize(store: store).run()
+        let after = try store.records(limit: 10)
+
+        await expect(after.allSatisfy { $0.categoryHint == "Travel" },
+                     "and it still says Travel after the graph has filed them")
+        await expect(after.allSatisfy { $0.category == "Travel" }, "which is also where they're filed")
+
+        // The failure this pins: run clustering twice and the votes must not have
+        // become our own output. Nothing about the second pass should differ.
+        _ = try await InnerjoinCore.Organize(store: store).run()
+        let twice = try store.records(limit: 10)
+        await expect(twice.allSatisfy { $0.categoryHint == "Travel" },
+                     "a second pass still counts the model's reading, not its own last answer")
+        await expect(twice.allSatisfy { $0.category == "Travel" }, "so the filing is stable")
+    }
+}
+
+private func oneVoteIsNotAVote() async throws {
+    try await withWorkspace { store in
+        // A real run named thirteen documents "spending_report" because one spreadsheet
+        // said so and nothing else agreed.
+        try await seed(store, documents: [
+            ("a", "Shared vendor.", "spending_report", ["Alcon Laboratories"]),
+            ("b", "Shared vendor.", nil,               ["Alcon Laboratories"]),
+            ("c", "Shared vendor.", nil,               ["Alcon Laboratories"]),
+        ])
+        _ = try await InnerjoinCore.Organize(store: store).run()
+        let names = Set(try store.records(limit: 10).compactMap(\.category))
+        await expect(!names.contains("spending_report"),
+                     "one document's opinion doesn't name the cluster it's in")
+    }
+}

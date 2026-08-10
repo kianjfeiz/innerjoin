@@ -128,7 +128,7 @@ struct Eval {
             }
 
             score.asked += 1
-            let found = answer.text.localizedCaseInsensitiveContains(question.expected)
+            let found = Self.states(question.expected, in: answer.text)
             if found, answer.answered {
                 score.correct += 1
                 // An answer with no citation is a claim, not a finding — even when the
@@ -141,6 +141,28 @@ struct Eval {
             }
         }
         return score
+    }
+
+    /// Whether an answer actually states the expected value.
+    ///
+    /// Literal containment, plus the date the same day can be written as. Scoring
+    /// "You must respond by June 1, 2026" as wrong when the truth is 2026-06-01 measures
+    /// my formatter, not the model. (The prompt separately asks for dates copied
+    /// verbatim; that's a style rule, not a correctness one.)
+    static func states(_ expected: String, in answer: String) -> Bool {
+        if answer.localizedCaseInsensitiveContains(expected) { return true }
+        guard let date = Dates.parseISO(expected) else { return false }
+        return Self.dateSpellings(date).contains { answer.localizedCaseInsensitiveContains($0) }
+    }
+
+    static func dateSpellings(_ date: Date) -> [String] {
+        ["MMMM d, yyyy", "MMM d, yyyy", "d MMMM yyyy", "M/d/yyyy", "d/M/yyyy", "MMMM d yyyy"]
+            .map { format in
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.dateFormat = format
+                return formatter.string(from: date)
+            }
     }
 
     struct Reasoning {
@@ -247,6 +269,10 @@ struct Eval {
             !known.contains { $0 == want || $0.contains(want) || want.contains($0) }
         }.sorted()
         report.admittedScenery = unwanted.filter { names.contains($0) }.sorted()
+
+        // Which entities clustering threw away as uninformative — the single most
+        // useful thing to see when categories come out wrong.
+        report.ignoredHubs = (try? Organize(store: store).neighbours(of: try store.records(limit: 500)).hubs) ?? []
 
         // --- names: is each document called what it is, and only one thing? ---
         let understood = documents.filter { $0.stage == .understood }
@@ -355,12 +381,16 @@ struct Report {
     var store: Store? = nil
     var reasoning: Eval.Reasoning? = nil
     var namesUnique = true
+    var ignoredHubs: [String] = []
     var nameExamples: [String] = []
 
     var readRate: Double { ratio(filesRead, filesExpected) }
     var factRate: Double { ratio(factsFound, factsExpected) }
     var entityRecall: Double { ratio(entitiesFound, entitiesExpected) }
     var categoryPurity: Double { ratio(documentsInPureCategory, documentsCategorized) }
+    /// Share of the library that reached a real category rather than the holding pen.
+    /// Purity without this is gameable by filing nothing.
+    var categoryCoverage: Double { ratio(documentsCategorized, filesRead) }
     var citationValidity: Double { citationsStored == 0 ? 1 : ratio(citationsValid, citationsStored) }
     /// 1.0 means every category calls each fact by a single name.
     var schemaCoherence: Double { ratio(fieldUsesOnDominantName, fieldUses) }
@@ -383,7 +413,7 @@ struct Report {
         readRate >= 0.99 && factRate >= 0.98 && citationValidity >= 0.999
             && entityRecall >= 0.95 && categoryPurity >= 0.90 && sceneryAdmitted == 0
             && brokenFilesHandled == brokenFilesExpected && schemaCoherence >= 0.90
-            && namedShare >= 0.90 && namesUnique
+            && namedShare >= 0.90 && namesUnique && categoryCoverage >= 0.60
             && (reasoning?.passed ?? true)
     }
 
@@ -395,6 +425,7 @@ struct Report {
         Swift.print("  entities found      \(percent(entityRecall))   \(entitiesFound)/\(entitiesExpected)  (\(entityTotal) total, \(String(format: "%.1f", entitiesPerRecord))/record)")
         Swift.print("  scenery kept out    \(sceneryAdmitted == 0 ? " yes" : "  NO")   \(admittedScenery.joined(separator: ", "))")
         Swift.print("  category purity     \(percent(categoryPurity))   \(documentsInPureCategory)/\(documentsCategorized) placed")
+        Swift.print("  category coverage   \(percent(categoryCoverage))   \(documentsCategorized)/\(filesRead) filed")
         Swift.print("  citations valid     \(percent(citationValidity))   \(citationsValid)/\(citationsStored)")
         Swift.print("  schema coherence    \(percent(schemaCoherence))   \(fieldUsesOnDominantName)/\(fieldUses) field uses on one name")
         Swift.print("  named from contents \(percent(namedShare))   \(documentsNamed)/\(documentsUnderstood)\(namesUnique ? "" : "  NAMES COLLIDE")")
@@ -407,6 +438,9 @@ struct Report {
         for line in impureCategories.prefix(6) { Swift.print("    mixed category: \(line)") }
         for line in splitConcepts.prefix(6)    { Swift.print("    split naming:   \(line)") }
         Swift.print("  entities: " + entityNames.joined(separator: " | "))
+        if !ignoredHubs.isEmpty {
+            Swift.print("  ignored as hubs: " + ignoredHubs.joined(separator: ", "))
+        }
         for line in nameExamples { Swift.print("    named:  \(line)") }
 
         // Reading documents right is half the job; answering questions about them is the

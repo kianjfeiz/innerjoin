@@ -33,9 +33,12 @@ public struct Record: Codable, Identifiable, Equatable, Sendable {
     public var kind: String?
     public var title: String
     public var summary: String?
-    /// The model's category guess. Once graph clustering exists it becomes a prior,
-    /// not the decider.
+    /// Where this document is filed. Written by the graph, not the model.
     public var category: String?
+    /// What the model thought when it read the document, kept untouched by clustering.
+    /// This is the evidence every later pass votes on, so it must never be overwritten
+    /// with a conclusion drawn from it.
+    public var categoryHint: String?
 
     /// The date this document is *about*, which is rarely the date it was added.
     public var happenedOn: Date?
@@ -48,12 +51,14 @@ public struct Record: Codable, Identifiable, Equatable, Sendable {
 
     public init(
         id: Int64? = nil, documentID: Int64, kind: String? = nil, title: String,
-        summary: String? = nil, category: String? = nil, happenedOn: Date? = nil,
+        summary: String? = nil, category: String? = nil, categoryHint: String? = nil,
+        happenedOn: Date? = nil,
         amount: Double? = nil, currency: String? = nil,
         fields: [String: FieldValue] = [:], createdAt: Date = Date()
     ) {
         self.id = id; self.documentID = documentID; self.kind = kind; self.title = title
-        self.summary = summary; self.category = category; self.happenedOn = happenedOn
+        self.summary = summary; self.category = category
+        self.categoryHint = categoryHint ?? category; self.happenedOn = happenedOn
         self.amount = amount; self.currency = currency; self.fields = fields
         self.createdAt = createdAt
     }
@@ -79,6 +84,7 @@ extension Record: FetchableRecord, MutablePersistableRecord {
         container["title"] = title
         container["summary"] = summary
         container["category"] = category
+        container["categoryHint"] = categoryHint
         container["happenedOn"] = happenedOn
         container["amount"] = amount
         container["currency"] = currency
@@ -89,6 +95,7 @@ extension Record: FetchableRecord, MutablePersistableRecord {
     public init(row: Row) throws {
         id = row["id"]; documentID = row["documentID"]; kind = row["kind"]
         title = row["title"]; summary = row["summary"]; category = row["category"]
+        categoryHint = row["categoryHint"]
         happenedOn = row["happenedOn"]; amount = row["amount"]; currency = row["currency"]
         createdAt = row["createdAt"]
         if let json: String = row["fields"], let data = json.data(using: .utf8) {

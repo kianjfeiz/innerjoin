@@ -42,11 +42,14 @@ struct Checks {
 
         await distillChecks()
         await consolidateChecks()
+        await entityIdentityChecks()
         await organizeChecks()
+        await categoryEvidenceChecks()
         await robustnessChecks()
         await learningChecks()
         await namingChecks()
         await providerChecks()
+        await anchorFormatChecks()
         await askChecks()
 
         print("\nGeometry")

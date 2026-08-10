@@ -161,12 +161,13 @@ struct Simulator: ModelProvider {
 
         // Cite the anchor on the line the value came from when there is one; otherwise
         // the document's first anchor, which is what a careful reader would do.
-        let anchorOnLine = Self.anchors(in: line).first
+        // Citations are now one token, "d3:e12", copied from the material.
+        let tokenOnLine = Self.citeTokens(in: line).first
+        let token = tokenOnLine ?? Self.citeTokens(in: user).first
         let document = Self.documentReference(before: question.expected, in: user)
-        let anchor = anchorOnLine ?? Self.anchors(in: user).first
 
         var citations: [[String: String]] = []
-        if let document, let anchor { citations = [["document": document, "element": anchor]] }
+        if let token { citations = [["cite": token]] }
 
         return try JSONSerialization.data(withJSONObject: [
             "answered": true,
@@ -194,6 +195,11 @@ struct Simulator: ModelProvider {
             if line.contains(needle) { return current }
         }
         return nil
+    }
+
+    /// The `[dN:eM]` tokens the material offers.
+    static func citeTokens(in text: String) -> [String] {
+        matches(#"\[(d\d+:e\d+)\]"#, in: text, group: 1)
     }
 
     static func anchors(in text: String) -> [String] {

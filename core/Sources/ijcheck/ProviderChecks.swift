@@ -101,3 +101,37 @@ private func schemaRefusal() async throws {
     await expect(!ProviderError.isAboutTheSchema("context length exceeded"),
                  "nor a document too long to send")
 }
+
+/// Both of these came out of the first run against a real model, and neither could have
+/// been found any other way: a simulator cites anchors in exactly the form it was told to.
+func anchorFormatChecks() async {
+    print("\nAnchors · what a real model actually writes")
+    await check("an anchor cited with brackets still resolves", bracketedAnchors)
+    await check("an anchor that leaked into a title is removed", anchorsInProse)
+}
+
+private func bracketedAnchors() async throws {
+    // The rendition shows anchors as "[e12]", so models cite them that way about as
+    // often as bare. Every bracketed one was being discarded as invented — the document
+    // said it, the model copied it faithfully, and punctuation threw the provenance away.
+    await expectEqual(Element.normalizeTag("[e12]"), "e12", "brackets are stripped")
+    await expectEqual(Element.normalizeTag("e12"), "e12", "bare still works")
+    await expectEqual(Element.normalizeTag(" E12, "), "e12", "so do case and stray punctuation")
+
+    // Being liberal costs nothing — the tag still has to exist on the document — but
+    // it must not turn nonsense into a citation.
+    await expect(Element.normalizeTag("e") == nil, "a bare letter is not an anchor")
+    await expect(Element.normalizeTag("page 3") == nil, "nor is prose")
+    await expect(Element.normalizeTag("d3") == nil, "nor a document reference")
+    await expect(Element.normalizeTag(nil) == nil, "nor nothing at all")
+}
+
+private func anchorsInProse() async throws {
+    // A real run produced the title "October Trip [e1]", which became a filename.
+    await expectEqual(Element.stripTags("October Trip [e1]"), "October Trip",
+                      "a trailing anchor is removed from a title")
+    await expectEqual(Element.stripTags("Rent [e3] is due"), "Rent is due",
+                      "and one in the middle, without leaving a double space")
+    await expectEqual(Element.stripTags("Invoice A-2402"), "Invoice A-2402",
+                      "ordinary text is untouched")
+}

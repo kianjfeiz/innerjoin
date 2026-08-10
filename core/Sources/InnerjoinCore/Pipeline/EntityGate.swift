@@ -59,6 +59,16 @@ public struct EntityGate {
             return .reject("generic role")
         }
 
+        // Whoever processed the paperwork is not a party to it. A deed names its notary,
+        // its witness, its recording clerk and its title company; a real run proposed
+        // three of those four as parties to a garage transfer. Asking the model nicely
+        // didn't hold, and it can't — from inside the sentence "sworn before notary
+        // J. Whitfield", the notary looks exactly like a person the document is about.
+        // The document itself says which they are, right before the name.
+        if let role = processingRole(before: name) {
+            return .reject("named as the \(role)")
+        }
+
         // Places have to be specific enough to be a subject. "1247 Fillmore St" is a
         // thing you can have a lease on; "California" is a hub waiting to happen.
         if Self.administrativeRegions.contains(normalized), !normalized.contains(where: \.isNumber) {
@@ -119,6 +129,31 @@ public struct EntityGate {
     /// English builds role nouns from a handful of endings; matching the ending keeps
     /// this from having to enumerate every one.
     static let roleSuffixes: [String] = ["holder", "payer", "payee", "signer", "writer"]
+
+    /// Whether the document introduces this name as the person who *handled* it.
+    ///
+    /// Looks at the words immediately before the name, which is where the document says
+    /// what someone's part in it was: "witnessed by R. Delacroix", "sworn before notary
+    /// J. Whitfield", "recorded by clerk A. Nakamura", "title work by Golden Gate Title
+    /// Company". Deliberately a short window — further back and an ordinary sentence
+    /// starts matching.
+    func processingRole(before name: String) -> String? {
+        guard let range = documentText.range(of: name, options: [.caseInsensitive])
+        else { return nil }
+        let start = documentText.index(range.lowerBound,
+                                       offsetBy: -min(60, documentText.distance(
+                                           from: documentText.startIndex, to: range.lowerBound)))
+        let lead = documentText[start..<range.lowerBound].lowercased()
+        return Self.processingRoles.first { lead.contains($0) }
+    }
+
+    /// The parts people play in producing a document rather than being party to it.
+    static let processingRoles: [String] = [
+        "notary", "notarized by", "sworn before", "witness", "witnessed by",
+        "recorded by", "clerk", "prepared by", "drafted by", "issued through",
+        "title work by", "title company", "escrow", "attested", "certified by",
+        "on behalf of", "agent for", "care of", "c/o",
+    ]
 
     /// The words paperwork is made of. They turn up capitalised at the start of a
     /// statement line, which is exactly what a name looks like from the outside.

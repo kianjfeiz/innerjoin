@@ -153,6 +153,18 @@ public final class Store: Sendable {
             }
         }
 
+        // v5 — keep the model's own category guess apart from the category the graph
+        // assigned. They were one column, so every clustering pass overwrote the
+        // evidence it needed on the next pass: after one run the votes were no longer
+        // the model's opinions but our own previous answer, read back as if independent.
+        m.registerMigration("v5_category_hint") { db in
+            try db.alter(table: "record") { t in
+                t.add(column: "categoryHint", .text)
+            }
+            // Before any clustering has run, today's category *is* the guess.
+            try db.execute(sql: "UPDATE record SET categoryHint = category WHERE categoryHint IS NULL")
+        }
+
         return m
     }
 

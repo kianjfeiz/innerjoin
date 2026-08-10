@@ -87,6 +87,34 @@ public struct Element: Codable, Identifiable, Equatable, Sendable {
     }
 
     public static func tag(for position: Int) -> String { "e\(position)" }
+
+    /// Reads back an anchor a model cited, in whatever form it wrote it.
+    ///
+    /// The markdown shows anchors as `[e12]`, so models cite them as `[e12]` about as
+    /// often as `e12` — and a real run showed every bracketed one being discarded as
+    /// invented. The document said it, the model copied it faithfully, and a punctuation
+    /// mismatch threw the provenance away. Being liberal here costs nothing: the tag
+    /// still has to exist on the document or it's refused anyway.
+    public static func normalizeTag(_ cited: String?) -> String? {
+        guard let cited else { return nil }
+        let stripped = cited.trimmingCharacters(in: CharacterSet(charactersIn: " \t\n[](),.;:'\"“”"))
+            .lowercased()
+        guard stripped.count > 1, stripped.hasPrefix("e"),
+              stripped.dropFirst().allSatisfy(\.isNumber)
+        else { return nil }
+        return stripped
+    }
+
+    /// Removes anchors from text that was meant to be prose.
+    ///
+    /// A title is what a person would call the document. A real run produced
+    /// "October Trip [e1]" — the model helpfully cited its own title, and the citation
+    /// ended up in the filename.
+    public static func stripTags(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\s*\[e\d+\]"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmed
+    }
 }
 
 extension Element: FetchableRecord, MutablePersistableRecord {

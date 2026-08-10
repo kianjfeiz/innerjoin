@@ -61,6 +61,11 @@ struct OpenAICompatibleProvider: ModelProvider {
         var body: [String: Any] = [
             "model": settings.model,
             "max_tokens": maxTokens,
+            // Extraction has a right answer, so there is nothing for sampling to
+            // explore. Left at the default, two runs of the same corpus scored 93% and
+            // 57% on category purity with no change in between — which makes every
+            // measurement a coin flip and every "improvement" unfalsifiable.
+            "temperature": 0,
             "messages": [
                 ["role": "system", "content": system],
                 ["role": "user", "content": user],
@@ -73,6 +78,26 @@ struct OpenAICompatibleProvider: ModelProvider {
                 ],
             ],
         ]
+        // Reasoning models spend their output budget thinking before they write, and
+        // the thinking is billed and then thrown away. Measured on a real run: 306
+        // completion tokens with it, 18 without, for the same answer — and on longer
+        // documents the budget ran out mid-thought, so the reply arrived empty and the
+        // document went unread. Extraction is a copying task, not a puzzle.
+        //
+        // The parameter is a router extension, so it's only sent where it's understood.
+        // `IJ_REASONING` turns it back on for a model that genuinely needs it.
+        if settings.baseURL.host?.contains("openrouter") == true {
+            let wanted = ProcessInfo.processInfo.environment["IJ_REASONING"]?.lowercased()
+            switch wanted {
+            case nil, "", "off", "false", "none":
+                body["reasoning"] = ["enabled": false]
+            case "low", "medium", "high":
+                body["reasoning"] = ["effort": wanted!]
+            default:
+                break
+            }
+        }
+
         var headers: [String: String] = [:]
         // Local servers usually need no key; hosted ones do.
         if let key = settings.apiKey, !key.isEmpty {
@@ -81,6 +106,11 @@ struct OpenAICompatibleProvider: ModelProvider {
 
         var data: Data
         do {
+            data = try await HTTP.post(settings.baseURL, headers: headers, body: body)
+        } catch ProviderError.http(let code, let complaint) where code == 400
+                    && complaint.lowercased().contains("reasoning") {
+            // A model that doesn't take the parameter at all.
+            body.removeValue(forKey: "reasoning")
             data = try await HTTP.post(settings.baseURL, headers: headers, body: body)
         } catch ProviderError.http(let code, let complaint) where code == 400
                     && ProviderError.isAboutTheSchema(complaint) {
@@ -106,11 +136,22 @@ struct OpenAICompatibleProvider: ModelProvider {
             throw ProviderError.malformed(error["message"] as? String ?? "the provider reported an error")
         }
         guard let choices = json["choices"] as? [[String: Any]],
-              let message = choices.first?["message"] as? [String: Any],
-              let text = message["content"] as? String else {
+              let first = choices.first,
+              let message = first["message"] as? [String: Any] else {
             throw ProviderError.malformed("unexpected response shape")
         }
-        guard let object = HTTP.firstJSONObject(in: text) else { throw ProviderError.noContent }
+        let text = message["content"] as? String ?? ""
+        // Say *why* nothing came back. "Returned nothing" sent me looking at the prompt
+        // when the answer was that the reply had been cut off mid-sentence.
+        if text.trimmed.isEmpty {
+            let reason = first["finish_reason"] as? String ?? "unknown"
+            throw ProviderError.malformed(reason == "length"
+                ? "the reply was cut off before any content (finish_reason: length) — raise maxTokens or turn off reasoning"
+                : "the reply had no content (finish_reason: \(reason))")
+        }
+        guard let object = HTTP.firstJSONObject(in: text) else {
+            throw ProviderError.malformed("the reply wasn't JSON: \(text.prefix(120))")
+        }
         return object
     }
 }

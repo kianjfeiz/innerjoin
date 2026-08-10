@@ -25,7 +25,8 @@ public struct Ask: Sendable {
     /// fields answer "how much is the rent", the text answers everything else.
     let deepReadCount = 3
     let maxCharactersPerExcerpt = 3_000
-    let maxOutputTokens = 1_200
+    // Headroom, so a model that thinks before it writes still has room to write.
+    let maxOutputTokens = 2_500
 
     public init(store: Store, provider: any ModelProvider, breadth: Int = 8) {
         self.store = store
@@ -81,14 +82,20 @@ public struct Ask: Sendable {
             schema: Ask.schema,
             maxTokens: maxOutputTokens
         )
-        let reply = try AnswerReply(data: data)
+        // Models occasionally answer in prose despite the schema. The words are still
+        // a good answer and they still carry their `d3:e12` tokens, so salvaging beats
+        // failing the question — and every token is verified below either way.
+        let reply = (try? AnswerReply(data: data))
+            ?? AnswerReply(salvaging: String(data: data, encoding: .utf8) ?? "")
 
         var citations: [Citation] = []
         var invented = 0
         var seen = Set<String>()
         for proposed in reply.citations {
-            guard let documentID = Ask.documentID(from: proposed.document),
-                  let element = elements[documentID]?[proposed.element.trimmed],
+            guard let (documentReference, elementReference) = Ask.split(proposed.cite),
+                  let documentID = Ask.documentID(from: documentReference),
+                  let tag = Element.normalizeTag(elementReference),
+                  let element = elements[documentID]?[tag],
                   let document = hits.first(where: { $0.document.id == documentID })?.document
             else { invented += 1; continue }
 
@@ -136,7 +143,7 @@ public struct Ask: Sendable {
                     lines.append("  \(summary)")
                 }
                 for (name, field) in record.fields.sorted(by: { $0.key < $1.key }) {
-                    let anchor = field.source.map { " [\($0)]" } ?? ""
+                    let anchor = field.source.map { " [d\(id):\($0)]" } ?? ""
                     let unit = field.unit.map { " \($0)" } ?? ""
                     lines.append("  \(name): \(field.value)\(unit)\(anchor)")
                 }
@@ -153,7 +160,11 @@ public struct Ask: Sendable {
 
             if position < deepReadCount, let markdown = hit.document.markdown {
                 lines.append("  ---")
-                lines.append(indent(String(markdown.prefix(maxCharactersPerExcerpt))))
+                // Anchors inside an excerpt are rewritten to carry their document too,
+                // so every citable token in the whole prompt is unambiguous on its own.
+                let owned = markdown.replacingOccurrences(
+                    of: #"\[(e\d+)\]"#, with: "[d\(id):$1]", options: .regularExpression)
+                lines.append(indent(String(owned.prefix(maxCharactersPerExcerpt))))
             }
             blocks.append(lines.joined(separator: "\n"))
         }
@@ -171,6 +182,14 @@ public struct Ask: Sendable {
         return formatter
     }()
 
+    /// "d3:e12" → ("d3", "e12"). Tolerates the brackets a model copies along with it.
+    static func split(_ cite: String) -> (String, String)? {
+        let cleaned = cite.trimmingCharacters(in: CharacterSet(charactersIn: " []()"))
+        let parts = cleaned.split(separator: ":", maxSplits: 1)
+        guard parts.count == 2 else { return nil }
+        return (String(parts[0]), String(parts[1]))
+    }
+
     /// "d12" → 12. Anything else is a citation that was never on offer.
     static func documentID(from reference: String) -> Int64? {
         let trimmed = reference.trimmed.lowercased()
@@ -186,13 +205,23 @@ public struct Ask: Sendable {
         - Use only what is in the material. You have no other knowledge of this person's \
         affairs. If the material doesn't answer the question, set `answered` to false and \
         say plainly what's missing — that is the right answer, not a failure.
-        - Cite everything. Each citation is a document reference and an element anchor \
-        from that same document, e.g. document "d3", element "e12". Never cite an anchor \
-        that isn't shown under that document.
+        - A document about a *neighbouring* subject is not an answer. Retrieval brings \
+        you whatever came closest, and when the library doesn't hold the answer, what \
+        came closest is something else entirely. Asked what someone paid for car \
+        insurance, a vehicle registration fee is not the answer — it is a different \
+        payment, to a different body, for a different thing. Asked for a passport \
+        number, a policy number is not the answer. Before you answer, check that the \
+        document you are about to cite is about the thing that was asked for, not merely \
+        about a thing that shares a word with it. When it isn't, `answered` is false.
+        - Cite everything. A citation is one of the `[dN:eM]` tokens shown in the \
+        material, copied exactly — for example "d3:e12". Never write a token that does \
+        not appear above; if a fact has no token beside it, say the fact and cite the \
+        nearest token that does support it, or cite nothing.
         - Answer in two or three sentences, in plain language. Name the documents by \
         their titles, not by their references.
-        - Copy figures, dates, and names exactly as they appear. Do not convert \
-        currencies or reformat dates.
+        - Copy figures, dates, and names exactly as they appear, character for \
+        character. A date written 2026-06-01 must be written back as 2026-06-01, not as \
+        "June 1, 2026" — the person reading it is checking it against the document.
         - Do not add anything up, average anything, or compute a difference. If several \
         documents each state an amount, report them individually and say they are \
         separate. Arithmetic across documents is done elsewhere, where the total can be \
@@ -213,13 +242,13 @@ public struct Ask: Sendable {
             ],
             "citations": [
                 "type": "array",
+                "description": "The [dN:eM] tokens supporting the answer, copied exactly.",
                 "items": [
                     "type": "object",
                     "properties": [
-                        "document": ["type": "string", "description": "The document reference, e.g. d3."],
-                        "element": ["type": "string", "description": "An anchor from that document, e.g. e12."],
+                        "cite": ["type": "string", "description": "One token, e.g. d3:e12."],
                     ],
-                    "required": ["document", "element"],
+                    "required": ["cite"],
                 ],
             ],
         ],
@@ -233,8 +262,24 @@ struct AnswerReply: Decodable {
     var citations: [ProposedCitation]
 
     struct ProposedCitation: Decodable {
-        var document: String
-        var element: String
+        var cite: String
+
+        init(cite: String) { self.cite = cite }
+
+        // Accept the older pair shape too — a model handed a schema will sometimes
+        // answer in whatever shape it saw last, and losing a good citation to that is
+        // worse than reading both.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: Keys.self)
+            if let single = try? container.decode(String.self, forKey: .cite) {
+                cite = single
+            } else {
+                let document = (try? container.decode(String.self, forKey: .document)) ?? ""
+                let element = (try? container.decode(String.self, forKey: .element)) ?? ""
+                cite = "\(document):\(element)"
+            }
+        }
+        enum Keys: String, CodingKey { case cite, document, element }
     }
 
     init(data: Data) throws {
@@ -243,6 +288,20 @@ struct AnswerReply: Decodable {
         } catch {
             throw ProviderError.malformed("\(error)")
         }
+    }
+
+    /// Reads an answer written as prose, keeping the citation tokens it mentions.
+    init(salvaging text: String) {
+        let trimmed = text.trimmed
+        answer = trimmed
+        answered = !trimmed.isEmpty
+        let pattern = #"[\(\[]?(d\d+:e\d+)[\)\]]?"#
+        let found = (try? NSRegularExpression(pattern: pattern))
+            .map { regex in
+                regex.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed))
+                    .compactMap { Range($0.range(at: 1), in: trimmed).map { String(trimmed[$0]) } }
+            } ?? []
+        citations = found.map { ProposedCitation(cite: $0) }
     }
 
     init(from decoder: Decoder) throws {
