@@ -55,7 +55,7 @@ that disagree, so it's a small fraction of extra calls. `ijparse settle` runs it
 ## Measuring it
 
 ```bash
-swift run ijcheck    # 194 checks, deterministic, no key
+swift run ijcheck    # 202 checks, deterministic, no key
 swift run ijeval     # score the pipeline against a known-truth corpus
 ```
 
@@ -233,6 +233,7 @@ Measured, not guessed — each of these was found by running adversarial documen
 | Limit | Effect |
 |---|---|
 | Multi-column pages: one paragraph may straddle the gutter | Reading order is correct — the gutter is found and each column read in turn — but PDFKit hands back an entire column glued to the first line of the next, and its glyph bounds are too unreliable to split on. |
+| Résumé-style header rows merge | "Flex · San Jose, CA · Software Engineering Intern · May 2026" is a two-column row; company, location, title and dates come out as one line. |
 | A shared organization can pull a document into the wrong category | A car registration and a health policy naming the same insurer look connected. Requiring two shared entities fixes it but strands a third of the library in "Everything else", which is worse. |
 | Vision occasionally drops a table cell | Seen on both a rendered receipt and a text-layer table — one `Qty` cell came back empty. |
 | OCR misreads happen | "Fillmore" → "Filmore" on a rendered page. Text-layer PDFs are unaffected. |

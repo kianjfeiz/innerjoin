@@ -10,6 +10,42 @@ func formatChecks() async {
     await check("multi-column pages read down one column then the next", columnOrder)
     await check("zip reading survives a truncated archive", corruptArchive)
     await check("a sideways scan is read upright and in order", rotatedScan)
+    await check("typographic ligatures become letters again", ligatures)
+    await check("a flattened bullet list is split back apart", flattenedBullets)
+    await check("a separator line is not mistaken for a list", separatorLine)
+}
+
+// These two came from running a real resume through the pipeline. Neither appears in
+// text you write yourself — you don't accidentally type a ligature, or flatten your
+// own bullet list — which is exactly why a synthetic corpus never found them.
+
+private func ligatures() async throws {
+    // "e\u{FB03}ciency" renders identically to "efficiency" and is a different string:
+    // searching for the word finds nothing, and a model sees an unfamiliar token.
+    await expectEqual(Tidying.repairLigatures("e\u{FB03}ciency"), "efficiency",
+                      "the ffi ligature becomes three letters")
+    await expectEqual(Tidying.repairLigatures("di\u{FB00}erent"), "different",
+                      "and the ff ligature two")
+    await expectEqual(Tidying.repairLigatures("plain text"), "plain text",
+                      "ordinary text is untouched")
+}
+
+private func flattenedBullets() async throws {
+    // PDF extraction returns a list as one run, bullets and all.
+    let flattened = DraftElement(.text, "● First point here ● Second point here ● Third point here")
+    let split = Tidying.splitInlineBullets(flattened)
+    await expectEqual(split.count, 3, "three points become three elements")
+    await expect(split.allSatisfy { $0.kind == .listItem }, "each is a list item")
+    await expect(split.first?.text == "First point here", "and the markers are gone")
+}
+
+private func separatorLine() async throws {
+    // The same character used as a separator. Splitting this turns one contact line
+    // into three meaningless fragments.
+    let contact = DraftElement(.text, "name@example.com • 555-0100 • example.com/profile")
+    let split = Tidying.splitInlineBullets(contact)
+    await expectEqual(split.count, 1, "a separator line stays one element")
+    await expectEqual(split.first?.text, contact.text, "unchanged")
 }
 
 private func rotatedScan() async throws {

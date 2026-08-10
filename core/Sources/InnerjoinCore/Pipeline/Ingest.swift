@@ -75,7 +75,10 @@ public struct Ingest: Sendable {
                           elementCount: 0, wasAlreadyPresent: false)
         }
 
-        let elements = output.elements.enumerated().map { position, draft in
+        // Repairs that apply whatever read the file: ligatures back to letters, and
+        // flattened bullet lists back into list items.
+        let cleaned = Tidying.clean(output.elements)
+        let elements = cleaned.enumerated().map { position, draft in
             Element(documentID: documentID,
                     position: position,
                     tag: Element.tag(for: position),
