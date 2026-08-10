@@ -9,7 +9,8 @@ struct IJParse: AsyncParsableCommand {
         abstract: "innerjoin's on-device preprocessor — read files into markdown and elements.",
         subcommands: [Add.self, Show.self, List.self, Find.self,
                       Understand.self, Record.self, Upcoming.self, Who.self,
-                      Graph.self, Tidy.self, Sort.self, Settle.self, Name.self, Key.self],
+                      Graph.self, Tidy.self, Sort.self, Settle.self, Name.self,
+                      Ask.self, Key.self],
         defaultSubcommand: Add.self
     )
 }
@@ -234,7 +235,9 @@ struct Understand: AsyncParsableCommand {
                 print("  couldn't    \(name.padded(34)) \(reason)")
             }
         }
+        let spend = await Meter.shared.snapshot()
         print("\n\(understood) understood · \(failed) failed")
+        if spend.calls > 0 { print("\(spend.description)") }
     }
 }
 
@@ -500,6 +503,60 @@ struct Graph: AsyncParsableCommand {
     }
 }
 
+// MARK: - ask
+
+struct Ask: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Ask a question about the library. Answers cite the documents they came from.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Argument(help: "The question.") var question: [String]
+    @Option(help: "anthropic | openrouter | openai | ollama | mock. Defaults to $IJ_PROVIDER.")
+    var provider: String?
+    @Option(help: "Model identifier. Defaults to $IJ_MODEL.") var model: String?
+    @Option(help: "How many documents to put in front of the model.") var breadth: Int = 8
+    @Flag(name: .shortAndLong, help: "Show what retrieval found, and every citation.")
+    var verbose = false
+
+    mutating func run() async throws {
+        let store = try workspace.open()
+        var environment = ProcessInfo.processInfo.environment
+        if let provider { environment["IJ_PROVIDER"] = provider }
+        if let model { environment["IJ_MODEL"] = model }
+        let settings = ProviderSettings.fromEnvironment(environment)
+
+        let text = question.joined(separator: " ")
+        let asker = InnerjoinCore.Ask(store: store, provider: settings.makeProvider(),
+                                     breadth: breadth)
+        let answer = try await asker.answer(text)
+
+        if verbose, !answer.consulted.isEmpty {
+            print("consulted:")
+            for document in answer.consulted {
+                print("  \(document.matchedRecord ? "◆" : " ") d\(document.id)  \(document.label)")
+            }
+            print("")
+        }
+
+        // An unanswerable question is answered honestly, and looks different on screen.
+        print(answer.answered ? answer.text : "— \(answer.text)")
+
+        if !answer.citations.isEmpty {
+            print("")
+            for citation in answer.citations {
+                let page = citation.page.map { " p\($0)" } ?? ""
+                print("  [d\(citation.documentID):\(citation.elementTag)]\(page)  \(citation.documentLabel)")
+                if verbose { print("      \"\(citation.quote)\"") }
+            }
+        }
+        if answer.invented > 0 {
+            print("\n  \(answer.invented) citation\(answer.invented == 1 ? "" : "s") pointed at nothing and were dropped.")
+        }
+        let spend = await Meter.shared.snapshot()
+        if spend.calls > 0 { print("\n\(spend.description)") }
+    }
+}
+
 // MARK: - name
 
 struct Name: AsyncParsableCommand {
@@ -558,8 +615,9 @@ struct Key: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             abstract: "Save a key for a provider. Reads it from stdin so it stays out of your shell history.")
 
-        @Argument(help: "anthropic | openai") var provider: String
+        @Argument(help: "anthropic | openrouter | openai | groq | together | deepseek") var provider: String
         @Argument(help: "The key. Omit it — safer — and paste when prompted.") var key: String?
+        @Option(help: "Model to verify against. Defaults to the provider's usual one.") var model: String?
 
         mutating func run() async throws {
             // A key passed as an argument is written to shell history and shows up in
@@ -577,9 +635,48 @@ struct Key: AsyncParsableCommand {
                   !trimmed.isEmpty else {
                 throw ValidationError("No key given.")
             }
-            print(Keychain.write(trimmed, account: provider.lowercased())
-                  ? "Saved to the login keychain. It never touches the database or the vault."
-                  : "Couldn't save to the keychain.")
+            let name = provider.lowercased()
+
+            // Checked before it's stored, in two steps. The shape check is free and
+            // catches the mistake that actually happens — a password pasted into a
+            // prompt that asked for a key. The live call catches everything else. A
+            // credential that was never valid must never be written anywhere; finding
+            // out later means it sits in the keychain looking correct.
+            if let complaint = ProviderError.lookWrong(trimmed, for: name) {
+                throw ValidationError(complaint)
+            }
+
+            var environment = ProcessInfo.processInfo.environment
+            environment["IJ_PROVIDER"] = name
+            environment["IJ_API_KEY"] = trimmed
+            if let model { environment["IJ_MODEL"] = model }
+            let settings = ProviderSettings.fromEnvironment(environment)
+
+            print("Checking it against \(settings.makeProvider().label)…")
+            do {
+                _ = try await settings.makeProvider().extract(
+                    system: "Reply with JSON only.",
+                    user: "Return {\"ok\":true}",
+                    schema: ["type": "object",
+                             "properties": ["ok": ["type": "boolean"]],
+                             "required": ["ok"]],
+                    maxTokens: 16)
+            } catch let error as ProviderError {
+                switch error {
+                case .http(let code, _) where code == 401 || code == 403:
+                    throw ValidationError("The service rejected that key (\(code)). Nothing was saved.")
+                case .http(let code, let body):
+                    throw ValidationError("The service answered \(code): \(body.prefix(160))\nNothing was saved.")
+                default:
+                    // It authenticated but answered oddly — the key is fine, which is
+                    // all this command is deciding.
+                    break
+                }
+            }
+
+            print(Keychain.write(trimmed, account: name)
+                  ? "Verified and saved to the login keychain. It never touches the database or the vault."
+                  : "The key works, but it couldn't be saved to the keychain.")
         }
     }
 

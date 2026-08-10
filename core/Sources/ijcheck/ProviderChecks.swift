@@ -7,6 +7,7 @@ func providerChecks() async {
     await check("an unknown name doesn't silently become Anthropic's address", unknownService)
     await check("environment beats the built-in default", environmentOverrides)
     await check("a schema refusal is told apart from a real rejection", schemaRefusal)
+    await check("a password typed into the key prompt is refused, not stored", passwordIsNotAKey)
 }
 
 private func knownServices() async throws {
@@ -22,14 +23,14 @@ private func knownServices() async throws {
         "openai": "api.openai.com",
     ]
     for (name, host) in expected {
-        let settings = ProviderSettings.fromEnvironment(["IJ_PROVIDER": name])
+        let settings = ProviderSettings.fromEnvironment(["IJ_PROVIDER": name, "IJ_API_KEY": "test-key"])
         await expectEqual(settings.kind, .openAICompatible, "\(name) speaks the OpenAI dialect")
         await expectEqual(settings.baseURL.host, host, "\(name) resolves to \(host)")
         await expect(settings.baseURL.path.contains("chat/completions"),
                      "\(name) points at the chat endpoint, not just the host")
     }
 
-    let anthropic = ProviderSettings.fromEnvironment(["IJ_PROVIDER": "anthropic"])
+    let anthropic = ProviderSettings.fromEnvironment(["IJ_PROVIDER": "anthropic", "IJ_API_KEY": "test-key"])
     await expectEqual(anthropic.kind, .anthropic, "Anthropic has its own dialect")
     await expectEqual(anthropic.baseURL.host, "api.anthropic.com", "and its own address")
 }
@@ -38,10 +39,10 @@ private func unknownService() async throws {
     // Falling through to Anthropic is the current behaviour and it's a trap worth
     // knowing about: a typo sends the request to the wrong service with the wrong
     // dialect. Pinned here so the fallback is a decision, not an accident.
-    let settings = ProviderSettings.fromEnvironment(["IJ_PROVIDER": "openrouterr"])
+    let settings = ProviderSettings.fromEnvironment(["IJ_PROVIDER": "openrouterr", "IJ_API_KEY": "test-key"])
     await expectEqual(settings.kind, .anthropic, "an unrecognized name falls back to Anthropic")
-    await expect(settings.apiKey == nil || settings.apiKey?.isEmpty == false,
-                 "and looks for a key under the name as typed, so it fails loudly rather than misusing another")
+    await expectEqual(settings.baseURL.host, "api.anthropic.com",
+                      "which means a typo sends the request somewhere it won't work — loudly, not silently")
 }
 
 private func environmentOverrides() async throws {
@@ -54,6 +55,34 @@ private func environmentOverrides() async throws {
     await expectEqual(settings.model, "deepseek/deepseek-chat", "the model is taken as given")
     await expectEqual(settings.baseURL.port, 8000, "an explicit address wins over the known one")
     await expectEqual(settings.apiKey, "test-key", "and a key in the environment is used as-is")
+}
+
+private func passwordIsNotAKey() async throws {
+    // This happened, twice, for real: the prompt for a key said the word "password",
+    // and a password went in. It authenticates against nothing, and it sits in the
+    // keychain looking correct. Catching it offline and before storing is the whole
+    // point — a credential that was never valid must never be written down.
+    let complaint = try require(ProviderError.lookWrong("2010UtahAcct", for: "openrouter"),
+                                "a complaint")
+    await expect(complaint.contains("looks like a password"),
+                 "and it says so in those words, rather than \"invalid key\"")
+    await expect(complaint.contains("sk-or-"), "naming what a real one starts with")
+
+    await expect(ProviderError.lookWrong("", for: "openrouter") != nil, "empty is refused")
+    await expect(ProviderError.lookWrong("sk-or-v1 abc", for: "openrouter") != nil,
+                 "a value with a space in it is refused")
+    await expect(ProviderError.lookWrong("sk-ant-abc", for: "openrouter") != nil,
+                 "a key for a different service is refused")
+    await expect(ProviderError.lookWrong("sk-or-v1-tooshort", for: "openrouter") != nil,
+                 "and one that's too short")
+
+    // A plausible key passes the offline check; only the network can judge the rest.
+    await expect(ProviderError.lookWrong(
+        "sk-or-v1-" + String(repeating: "a", count: 64), for: "openrouter") == nil,
+        "a well-formed key is allowed through to the live check")
+    // Local servers and gateways have no convention, so nothing is imposed on them.
+    await expect(ProviderError.lookWrong("anything-at-all-here", for: "ollama") == nil,
+                 "a local server's key is not second-guessed")
 }
 
 private func schemaRefusal() async throws {

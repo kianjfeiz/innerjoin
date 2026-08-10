@@ -93,8 +93,146 @@ enum Corpus {
         expected.append(try germanNotice(folder))
         expected.append(try spreadsheet(folder))
         expected.append(try deck(folder))
+
+        // ---- Traps aimed at a real model rather than at the parser ----
+        // Each of these exists because a rule in the prompt is unverifiable without it:
+        // a simulator obeys instructions by construction, so "copy values as they
+        // appear" and "don't name scenery" can only be tested against a model that has
+        // the option of doing otherwise.
+        expected.append(try inconsistentInvoice(folder))
+        expected.append(try crowdedDeed(folder))
+        expected.append(try threeDatedNotice(folder))
         return expected
     }
+
+    // MARK: - Traps for a real model
+
+    /// An invoice whose stated total doesn't equal its own subtotal plus tax.
+    ///
+    /// Real paperwork contains arithmetic that doesn't add up — a discount applied
+    /// off-sheet, a rounding rule, a typo. A model that helpfully "corrects" the total
+    /// has silently replaced what the document says with what it thinks, and the
+    /// citation then points at a figure that isn't there. The right behaviour is to copy
+    /// the printed total, wrong-looking or not.
+    private static func inconsistentInvoice(_ folder: URL) throws -> Expected {
+        try pdf(folder.appendingPathComponent("invoice_A-2402.pdf"), lines: [
+            ("Alcon Laboratories", 16, true), ("", 6, false),
+            ("INVOICE A-2402", 13, true),
+            ("Date of invoice: 2026-05-19", 11, false),
+            ("Bill to: Vahid Feiz", 11, false), ("", 8, false),
+            ("Item                       Qty      Each      Amount", 11, true),
+            ("Lens cleaner                 6     18.00     108.00", 11, false),
+            ("Trial frames                 2     96.00     192.00", 11, false), ("", 6, false),
+            ("Subtotal                                     300.00", 11, false),
+            ("Tax (8.75%)                                   26.25", 11, false),
+            ("Total due                                    311.25", 11, true), ("", 8, false),
+            ("Terms: net 30. Remit to Alcon Laboratories.", 11, false),
+        ], scanned: false)
+        // 300.00 + 26.25 is 326.25. The invoice says 311.25 and 311.25 is the answer.
+        return Expected(file: "invoice_A-2402.pdf", area: "Supplies",
+                        entities: ["Alcon Laboratories"],
+                        facts: [("total_due", "311.25"), ("invoice_date", "2026-05-19")],
+                        scenery: [])
+    }
+
+    /// A deed thick with names that are not what it's about.
+    ///
+    /// The entity gate is deterministic and already tested, but it can only refuse what
+    /// it's given. This measures what a real model *proposes*: two genuine parties among
+    /// a notary, a witness, a recording clerk, a title company in the footer, and a
+    /// county. A model that returns all seven is describing the stationery.
+    private static func crowdedDeed(_ folder: URL) throws -> Expected {
+        try pdf(folder.appendingPathComponent("garage_deed.pdf"), lines: [
+            ("QUITCLAIM DEED", 18, true), ("", 8, false),
+            ("Grantor: M. Osei. Grantee: Vahid Feiz.", 11, false),
+            ("Property: garage space 12, 1247 Fillmore St, San Francisco.", 11, false),
+            ("Consideration: $1.00 and other valuable consideration.", 11, false),
+            ("Dated 2026-04-02.", 11, false), ("", 8, false),
+            ("Witnessed by R. Delacroix. Sworn before notary J. Whitfield,", 11, false),
+            ("commission expiring 2028-01-31, County of San Francisco.", 11, false),
+            ("Recorded by clerk A. Nakamura, instrument 2026-041882.", 11, false),
+            ("Title work by Golden Gate Title Company, order 88-2210.", 9, false),
+        ], scanned: false)
+        return Expected(file: "garage_deed.pdf", area: "Apartment",
+                        entities: ["M. Osei"],
+                        facts: [("note", "garage space 12")],
+                        // Every one of these is a real name and none is what the deed
+                        // is about.
+                        scenery: ["J. Whitfield", "R. Delacroix", "A. Nakamura",
+                                  "Golden Gate Title Company", "County of San Francisco"])
+    }
+
+    /// A notice carrying three dates, only one of which is what it's about.
+    ///
+    /// Printed date, effective date, respond-by date. `happenedOn` has to be the one the
+    /// document is *about*, and the deadline has to land in the dates table so it can
+    /// surface in a briefing. Getting this wrong is how an app tells someone the wrong
+    /// day.
+    private static func threeDatedNotice(_ folder: URL) throws -> Expected {
+        try pdf(folder.appendingPathComponent("rent_increase_notice.pdf"), lines: [
+            ("NOTICE OF RENT ADJUSTMENT", 17, true), ("", 8, false),
+            ("Printed 2026-05-02 by the office of M. Osei.", 10, false), ("", 6, false),
+            ("To the tenant of 1247 Fillmore St, Apt 4:", 11, false),
+            ("Effective 2026-07-01 the monthly rent becomes $3,395.00,", 11, false),
+            ("an increase of $195.00 from the current $3,200.00.", 11, false), ("", 6, false),
+            ("If you object you must respond in writing by 2026-06-01.", 11, false),
+            ("This notice is given under a thirty (30) day requirement.", 11, false),
+        ], scanned: false)
+        return Expected(file: "rent_increase_notice.pdf", area: "Apartment",
+                        entities: ["M. Osei", "1247 Fillmore St"],
+                        facts: [("rent_monthly", "$3,395.00")],
+                        scenery: [])
+    }
+
+    // MARK: - Questions with known answers
+
+    /// What someone would actually ask, and what a right answer contains.
+    ///
+    /// Extraction accuracy is only half of it. A library that reads every document
+    /// perfectly and then can't answer "when do I have to give notice" hasn't done the
+    /// job. These are scored the same way as the facts: the answer must contain the
+    /// value, every citation must resolve, and the questions the library *can't* answer
+    /// must be refused rather than filled in.
+    struct Question {
+        let text: String
+        /// A string a correct answer must contain. Empty when the point is refusal.
+        let expected: String
+        /// True when the library genuinely doesn't hold this, and saying so is correct.
+        let unanswerable: Bool
+
+        init(_ text: String, expects expected: String) {
+            self.text = text; self.expected = expected; self.unanswerable = false
+        }
+        init(refuses text: String) {
+            self.text = text; self.expected = ""; self.unanswerable = true
+        }
+    }
+
+    static let questions: [Question] = [
+        // Straight lookup, one document.
+        Question("how much is my monthly rent?", expects: "3,200"),
+        Question("what is the security deposit on the lease?", expects: "4,800"),
+        Question("when does my lease end?", expects: "2027-03-31"),
+
+        // The figure a model would rather recompute than copy.
+        Question("what is the total due on invoice A-2402?", expects: "311.25"),
+
+        // Requires the right date out of three.
+        Question("what is the new rent after the increase?", expects: "3,395"),
+        Question("by when do I have to object to the rent increase?", expects: "2026-06-01"),
+
+        // Named party, not scenery.
+        Question("who is my landlord?", expects: "Osei"),
+
+        // Across documents: the policy's own numbers.
+        Question("what is my health insurance deductible?", expects: "deductible"),
+
+        // Refusals. The library has none of this, and inventing an answer is the worst
+        // possible behaviour — worse than saying nothing.
+        Question(refuses: "how much did I pay for my car insurance?"),
+        Question(refuses: "what is my passport number?"),
+        Question(refuses: "when is my dentist appointment?"),
+    ]
 
     /// Files that must fail, and fail *visibly* rather than vanishing or crashing.
     /// Kept apart from the scored corpus because their success is failure.

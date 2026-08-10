@@ -9,12 +9,30 @@ import InnerjoinCore
 @main
 struct Eval {
     static func main() async throws {
-        let quick = ProcessInfo.processInfo.arguments.contains("--quick")
+        let arguments = ProcessInfo.processInfo.arguments
+        let quick = arguments.contains("--quick")
+
+        // The same corpus, the same known truth, a real model instead of the simulator.
+        // Every number the simulator produces is a claim about a program I wrote to
+        // imitate a model; this is the only way to find out which of those claims hold.
+        if arguments.contains("--real") {
+            try await runAgainstRealModel(settle: !arguments.contains("--no-settle"))
+            return
+        }
+
         let levels = quick ? [0.4] : [0.0, 0.4, 0.9]
 
         var allPassed = true
         for noise in levels {
-            let report = try await run(noise: noise, mode: .learning)
+            var report = try await run(noise: noise, mode: .learning, keepWorkspace: true)
+            if let store = report.store {
+                let byFile = Dictionary(uniqueKeysWithValues:
+                    try Corpus.build(in: URL(fileURLWithPath: NSTemporaryDirectory())
+                        .appendingPathComponent("ijeval-questions-\(Int(noise * 100))"))
+                        .map { ($0.file, $0) })
+                report.reasoning = try await scoreReasoning(
+                    store: store, provider: Simulator(expected: byFile, noise: noise))
+            }
             report.print()
             allPassed = allPassed && report.passed
         }
@@ -41,20 +59,127 @@ struct Eval {
         if !allPassed { exit(1) }
     }
 
+    /// One pass of the corpus through whatever model the environment points at, in the
+    /// configuration the app actually uses.
+    static func runAgainstRealModel(settle: Bool) async throws {
+        let settings = ProviderSettings.fromEnvironment()
+        guard settings.kind != .mock else {
+            print("--real needs a provider. Set IJ_PROVIDER, and a key.")
+            exit(1)
+        }
+        print("Real model: \(settings.makeProvider().label)")
+        print("Corpus: 22 documents with known truth, plus 3 broken files.\n")
+
+        await Meter.shared.reset()
+        let provider = settings.makeProvider()
+        var report = try await run(noise: 0, mode: settle ? .refined : .learning,
+                                  provider: provider, keepWorkspace: true)
+        let ingestionSpend = await Meter.shared.snapshot()
+
+        // Reading the documents right is half the job. This is the other half.
+        if let store = report.store {
+            report.reasoning = try await scoreReasoning(store: store, provider: provider)
+        }
+        report.print()
+
+        let spend = await Meter.shared.snapshot()
+        print(String(format: "  of which ingestion: %d calls, %d tokens",
+                     ingestionSpend.calls, ingestionSpend.inputTokens + ingestionSpend.outputTokens))
+        print("\n  cost: \(spend.description)")
+        if report.documentsUnderstood > 0 {
+            let perDocument = Double(spend.inputTokens + spend.outputTokens)
+                / Double(report.documentsUnderstood)
+            print(String(format: "        %.0f tokens per document", perDocument))
+        }
+        print(report.passed ? "\nMeets thresholds." : "\nBELOW THRESHOLD.")
+        if !report.passed { exit(1) }
+    }
+
+    /// Asks the corpus's known questions and scores the answers.
+    ///
+    /// Three things are measured, and the third matters most. Whether the right value
+    /// appears; whether every citation resolves to a real element of a real document;
+    /// and whether the questions the library cannot answer are refused. A system that
+    /// scores well on the first two and invents answers to the third is not usable, so
+    /// refusal is scored as strictly as accuracy.
+    static func scoreReasoning(store: Store, provider: any ModelProvider) async throws -> Reasoning {
+        var score = Reasoning()
+        let asker = Ask(store: store, provider: provider)
+
+        for question in Corpus.questions {
+            let answer: Ask.Answer
+            do {
+                answer = try await asker.answer(question.text)
+            } catch {
+                score.errors.append("\(question.text) — \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)")
+                continue
+            }
+            score.citationsOffered += answer.citations.count + answer.invented
+            score.citationsValid += answer.citations.count
+
+            if question.unanswerable {
+                score.refusalsExpected += 1
+                if answer.answered {
+                    score.wrong.append("INVENTED: \"\(question.text)\" → \(answer.text.prefix(110))")
+                } else {
+                    score.refusalsCorrect += 1
+                }
+                continue
+            }
+
+            score.asked += 1
+            let found = answer.text.localizedCaseInsensitiveContains(question.expected)
+            if found, answer.answered {
+                score.correct += 1
+                // An answer with no citation is a claim, not a finding — even when the
+                // value happens to be right.
+                if answer.citations.isEmpty { score.uncited += 1 }
+            } else if !answer.answered {
+                score.wrong.append("GAVE UP: \"\(question.text)\" (wanted \(question.expected))")
+            } else {
+                score.wrong.append("WRONG: \"\(question.text)\" wanted \(question.expected) — got \(answer.text.prefix(110))")
+            }
+        }
+        return score
+    }
+
+    struct Reasoning {
+        var asked = 0, correct = 0, uncited = 0
+        var refusalsExpected = 0, refusalsCorrect = 0
+        var citationsOffered = 0, citationsValid = 0
+        var wrong: [String] = []
+        var errors: [String] = []
+
+        var accuracy: Double { asked == 0 ? 0 : Double(correct) / Double(asked) }
+        var refusalRate: Double {
+            refusalsExpected == 0 ? 1 : Double(refusalsCorrect) / Double(refusalsExpected)
+        }
+        var citationValidity: Double {
+            citationsOffered == 0 ? 1 : Double(citationsValid) / Double(citationsOffered)
+        }
+        /// Answering is only useful if it's also honest, so all three must hold.
+        var passed: Bool {
+            accuracy >= 0.80 && refusalRate >= 0.90 && citationValidity >= 0.95
+                && errors.isEmpty
+        }
+    }
+
     enum Mode { case noLearning, learning, refined }
 
-    static func run(noise: Double, mode: Mode) async throws -> Report {
+    static func run(noise: Double, mode: Mode,
+                    provider explicit: (any ModelProvider)? = nil,
+                    keepWorkspace: Bool = false) async throws -> Report {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ijeval-\(UUID().uuidString)")
         let corpusFolder = root.appendingPathComponent("corpus")
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { if !keepWorkspace { try? FileManager.default.removeItem(at: root) } }
 
         let truth = try Corpus.build(in: corpusFolder)
         let failures = try Corpus.buildFailures(in: corpusFolder.appendingPathComponent("broken"))
         let byFile = Dictionary(uniqueKeysWithValues: truth.map { ($0.file, $0) })
         let store = try Store(root: root.appendingPathComponent("workspace"))
 
-        let provider = Simulator(expected: byFile, noise: noise)
+        let provider: any ModelProvider = explicit ?? Simulator(expected: byFile, noise: noise)
         let librarian = Librarian(
             store: store, provider: provider,
             understandingLanes: 4,
@@ -67,6 +192,7 @@ struct Eval {
         }
 
         var report = try score(store: store, truth: truth, noise: noise)
+        if keepWorkspace { report.store = store }
         report.brokenFilesExpected = failures.count
         let all = try store.recentDocuments(limit: 500)
         report.brokenFilesHandled = failures.filter { name in
@@ -225,6 +351,9 @@ struct Report {
     var fieldUses = 0, fieldUsesOnDominantName = 0
     var splitConcepts: [String] = []
     var documentsUnderstood = 0, documentsNamed = 0
+    /// Kept only for a real-model run, where the questions are asked after scoring.
+    var store: Store? = nil
+    var reasoning: Eval.Reasoning? = nil
     var namesUnique = true
     var nameExamples: [String] = []
 
@@ -255,6 +384,7 @@ struct Report {
             && entityRecall >= 0.95 && categoryPurity >= 0.90 && sceneryAdmitted == 0
             && brokenFilesHandled == brokenFilesExpected && schemaCoherence >= 0.90
             && namedShare >= 0.90 && namesUnique
+            && (reasoning?.passed ?? true)
     }
 
     func print() {
@@ -278,6 +408,20 @@ struct Report {
         for line in splitConcepts.prefix(6)    { Swift.print("    split naming:   \(line)") }
         Swift.print("  entities: " + entityNames.joined(separator: " | "))
         for line in nameExamples { Swift.print("    named:  \(line)") }
+
+        // Reading documents right is half the job; answering questions about them is the
+        // other half, and it's the half a person actually sees.
+        if let reasoning {
+            Swift.print("\n  ── reasoning over the library " + String(repeating: "─", count: 30))
+            Swift.print("  answers correct     \(percent(reasoning.accuracy))   \(reasoning.correct)/\(reasoning.asked)")
+            Swift.print("  refused what it can't answer \(percent(reasoning.refusalRate))   \(reasoning.refusalsCorrect)/\(reasoning.refusalsExpected)")
+            Swift.print("  citations resolve   \(percent(reasoning.citationValidity))   \(reasoning.citationsValid)/\(reasoning.citationsOffered)")
+            if reasoning.uncited > 0 {
+                Swift.print("  \(reasoning.uncited) right answer(s) carried no citation")
+            }
+            for line in reasoning.wrong.prefix(8)  { Swift.print("    \(line)") }
+            for line in reasoning.errors.prefix(4) { Swift.print("    ERROR: \(line)") }
+        }
         Swift.print("  → \(passed ? "meets thresholds" : "BELOW THRESHOLD")")
     }
 }

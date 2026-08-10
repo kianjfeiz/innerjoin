@@ -244,6 +244,72 @@ public final class Store: Sendable {
         }
     }
 
+    /// Retrieval for a question asked in words, rather than a search for terms.
+    ///
+    /// `find` requires every token to match, which is right when someone types "lease
+    /// penalty" and wrong when they ask "how much is my rent?" — the question words
+    /// appear in no document and the whole query returns nothing. So: drop the words
+    /// that carry no meaning, try for all of what's left, and widen to any of it when
+    /// that finds nothing.
+    public func retrieve(_ question: String, limit: Int = 10) throws -> [Hit] {
+        let terms = Store.contentWords(of: question)
+        guard !terms.isEmpty else { return [] }
+
+        let text = terms.joined(separator: " ")
+        let narrow = try find(text, limit: limit)
+        if !narrow.isEmpty { return narrow }
+
+        // Nothing matched every word. Ask for any of them and let bm25 rank.
+        return try dbQueue.read { db in
+            guard let pattern = FTS5Pattern(matchingAnyTokenIn: text) else { return [] }
+            let records = try Record.fetchAll(db, sql: """
+                SELECT record.* FROM record
+                JOIN recordSearch ON recordSearch.rowid = record.id
+                WHERE recordSearch MATCH ? ORDER BY bm25(recordSearch) LIMIT ?
+                """, arguments: [pattern, limit])
+
+            var hits: [Hit] = []
+            var seen = Set<Int64>()
+            for record in records {
+                guard let document = try Document.fetchOne(db, key: record.documentID) else { continue }
+                seen.insert(record.documentID)
+                hits.append(Hit(document: document, record: record, matchedRecord: true))
+            }
+            let documents = try Document.fetchAll(db, sql: """
+                SELECT document.* FROM document
+                JOIN documentSearch ON documentSearch.rowid = document.id
+                WHERE documentSearch MATCH ? ORDER BY bm25(documentSearch) LIMIT ?
+                """, arguments: [pattern, limit])
+            for document in documents {
+                guard let id = document.id, !seen.contains(id) else { continue }
+                let record = try Record.filter(Record.Columns.documentID == id).fetchOne(db)
+                hits.append(Hit(document: document, record: record, matchedRecord: false))
+            }
+            return Array(hits.prefix(limit))
+        }
+    }
+
+    /// The words in a question that a document might actually contain.
+    public static func contentWords(of question: String) -> [String] {
+        question
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .map { $0.lowercased() }
+            .filter { $0.count > 1 && !questionWords.contains($0) }
+    }
+
+    /// Question and function words. Deliberately short: over-trimming throws away the
+    /// noun someone was actually asking about.
+    private static let questionWords: Set<String> = [
+        "what", "whats", "when", "where", "who", "whos", "whom", "which", "why", "how",
+        "is", "are", "was", "were", "be", "been", "am", "do", "does", "did", "can",
+        "could", "should", "would", "will", "shall", "have", "has", "had",
+        "the", "a", "an", "of", "to", "in", "on", "at", "for", "from", "by", "with",
+        "and", "or", "but", "if", "then", "than", "that", "this", "these", "those",
+        "it", "its", "my", "me", "i", "you", "your", "our", "we", "they", "them",
+        "there", "here", "about", "any", "all", "some", "much", "many", "most",
+        "get", "got", "tell", "show", "find", "know", "need", "want", "please",
+    ]
+
     /// Full-text search over document names and markdown. Works with no model connected.
     public func search(_ query: String, limit: Int = 20) throws -> [Document] {
         try dbQueue.read { db in

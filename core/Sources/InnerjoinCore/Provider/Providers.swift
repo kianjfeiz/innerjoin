@@ -31,6 +31,9 @@ struct AnthropicProvider: ModelProvider {
               let content = json["content"] as? [[String: Any]] else {
             throw ProviderError.malformed("unexpected response shape")
         }
+        let usage = json["usage"] as? [String: Any]
+        await Meter.shared.record(input: usage?["input_tokens"] as? Int,
+                                  output: usage?["output_tokens"] as? Int)
         for block in content where block["type"] as? String == "tool_use" {
             if let input = block["input"] {
                 return try JSONSerialization.data(withJSONObject: input)
@@ -94,6 +97,10 @@ struct OpenAICompatibleProvider: ModelProvider {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ProviderError.malformed("the reply wasn't JSON")
         }
+        let usage = json["usage"] as? [String: Any]
+        await Meter.shared.record(input: usage?["prompt_tokens"] as? Int,
+                                  output: usage?["completion_tokens"] as? Int)
+
         // A router can answer 200 and put the failure in the body.
         if let error = json["error"] as? [String: Any] {
             throw ProviderError.malformed(error["message"] as? String ?? "the provider reported an error")

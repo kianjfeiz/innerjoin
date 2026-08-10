@@ -26,6 +26,40 @@ public enum ProviderError: LocalizedError {
         }
     }
 
+    /// What a credential looks like before any network call.
+    ///
+    /// Worth doing offline and first, because the failure this catches is not "wrong
+    /// key" but "that isn't a key at all" — a password typed into a prompt that asked
+    /// for one. Saying so immediately is the difference between a five-second fix and
+    /// a secret sitting in the wrong place.
+    public static func lookWrong(_ candidate: String, for provider: String) -> String? {
+        let key = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        if key.isEmpty { return "Nothing was entered." }
+        if key.contains(" ") { return "That contains a space, so it isn't an API key." }
+
+        let expected: String? = switch provider.lowercased() {
+        case "openrouter": "sk-or-"
+        case "anthropic":  "sk-ant-"
+        case "openai":     "sk-"
+        default:           nil    // local servers and gateways use anything, or nothing
+        }
+        guard let expected else { return nil }
+
+        if !key.hasPrefix(expected) {
+            // The specific mistake worth naming, because it's the one people make.
+            let looksLikeAPassword = key.count < 40 && !key.contains("-")
+            return looksLikeAPassword
+                ? """
+                  That looks like a password, not an API key — nothing was saved.
+                  A key for \(provider) starts with "\(expected)" and is much longer.
+                  Copy it from the provider's website, not from your password manager.
+                  """
+                : "A \(provider) key starts with \"\(expected)\". That doesn't, so nothing was saved."
+        }
+        if key.count < 24 { return "That's too short to be a key for \(provider)." }
+        return nil
+    }
+
     /// Whether a rejection is about the JSON schema we asked for rather than about us.
     ///
     /// Narrow on purpose: a malformed request, a bad key or an unknown model must still

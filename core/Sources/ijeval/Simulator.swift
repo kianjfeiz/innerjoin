@@ -16,6 +16,16 @@ struct Simulator: ModelProvider {
     var label: String { "Simulator (noise \(Int(noise * 100))%)" }
 
     func extract(system: String, user: String, schema: [String: Any], maxTokens: Int) async throws -> Data {
+        // Answering is a different job with a different contract, so it gets its own
+        // stand-in. This one validates the *harness* — that retrieval put the right
+        // document in front of the model, that a citation resolves, that refusal works,
+        // that scoring counts it all correctly. It cannot validate the model's
+        // reasoning, and doesn't pretend to: it only reports what is demonstrably
+        // present in the material it was handed.
+        if system.hasPrefix("You answer questions") {
+            return try answer(user)
+        }
+
         guard let truth = match(user) else {
             return try JSONSerialization.data(withJSONObject: [
                 "title": "Untitled", "summary": "No ground truth for this document.",
@@ -123,6 +133,67 @@ struct Simulator: ModelProvider {
         case "Travel":    "booking"
         default:          "note"
         }
+    }
+
+    /// Answers from the material, and only from the material.
+    ///
+    /// Finds the question among the corpus's known ones, then checks whether its answer
+    /// is actually present in what retrieval supplied. Present → answer and cite the
+    /// anchor on the line it was found on. Absent → refuse. That is exactly the
+    /// behaviour the real prompt asks for, so the harness can be verified before a real
+    /// model is ever called.
+    private func answer(_ user: String) throws -> Data {
+        let asked = Self.questionText(in: user)
+        let question = Corpus.questions.first {
+            $0.text.compare(asked, options: .caseInsensitive) == .orderedSame
+        }
+
+        // Nothing known about it, or nothing to find: refusing is correct.
+        guard let question, !question.unanswerable,
+              let line = Self.line(containing: question.expected, in: user)
+        else {
+            return try JSONSerialization.data(withJSONObject: [
+                "answered": false,
+                "answer": "Nothing in the material provided covers that.",
+                "citations": [],
+            ])
+        }
+
+        // Cite the anchor on the line the value came from when there is one; otherwise
+        // the document's first anchor, which is what a careful reader would do.
+        let anchorOnLine = Self.anchors(in: line).first
+        let document = Self.documentReference(before: question.expected, in: user)
+        let anchor = anchorOnLine ?? Self.anchors(in: user).first
+
+        var citations: [[String: String]] = []
+        if let document, let anchor { citations = [["document": document, "element": anchor]] }
+
+        return try JSONSerialization.data(withJSONObject: [
+            "answered": true,
+            "answer": "\(question.expected) — from \(document ?? "the library").",
+            "citations": citations,
+        ])
+    }
+
+    private static func questionText(in user: String) -> String {
+        guard let line = user.components(separatedBy: .newlines)
+            .first(where: { $0.hasPrefix("Question:") }) else { return "" }
+        return String(line.dropFirst("Question:".count))
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    private static func line(containing needle: String, in text: String) -> String? {
+        text.components(separatedBy: .newlines).first { $0.contains(needle) }
+    }
+
+    /// Which document block a value sits in: the last `[dN]` header above it.
+    private static func documentReference(before needle: String, in text: String) -> String? {
+        var current: String?
+        for line in text.components(separatedBy: .newlines) {
+            if let match = matches(#"^\[(d\d+)\]"#, in: line, group: 1).first { current = match }
+            if line.contains(needle) { return current }
+        }
+        return nil
     }
 
     static func anchors(in text: String) -> [String] {
