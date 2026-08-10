@@ -9,7 +9,7 @@ struct IJParse: AsyncParsableCommand {
         abstract: "innerjoin's on-device preprocessor — read files into markdown and elements.",
         subcommands: [Add.self, Show.self, List.self, Find.self,
                       Understand.self, Record.self, Upcoming.self, Who.self,
-                      Graph.self, Key.self],
+                      Graph.self, Tidy.self, Key.self],
         defaultSubcommand: Add.self
     )
 }
@@ -340,6 +340,36 @@ struct Who: AsyncParsableCommand {
         for record in try store.records(linkedTo: match.id ?? 0) {
             let when = record.happenedOn.map(Record.day) ?? "—"
             print("  \(when.padded(12)) \(record.title)")
+        }
+    }
+}
+
+// MARK: - tidy
+
+struct Tidy: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Merge duplicate entities and flag documents that disagree. No model needed.")
+
+    @OptionGroup var workspace: WorkspaceOption
+
+    mutating func run() async throws {
+        let store = try workspace.open()
+        let outcome = try await Consolidate(store: store).run()
+
+        if outcome.merged.isEmpty {
+            print("No duplicates found.")
+        } else {
+            print("merged")
+            for merge in outcome.merged {
+                print("  \(merge.absorbed.padded(30)) → \(merge.kept.padded(30)) \(merge.why)")
+            }
+        }
+        guard !outcome.conflicts.isEmpty else { return }
+        print("\nworth a look — two documents disagree")
+        for conflict in outcome.conflicts {
+            print("  \(conflict.field) · \(conflict.entity)")
+            print("    \(conflict.older.title.padded(34)) \(conflict.older.value)")
+            print("    \(conflict.newer.title.padded(34)) \(conflict.newer.value)  ← newer")
         }
     }
 }

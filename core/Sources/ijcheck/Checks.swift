@@ -39,6 +39,7 @@ struct Checks {
         await check("full-text search works with no model connected", searchWithoutModel)
 
         await distillChecks()
+        await consolidateChecks()
 
         print("\nGeometry")
         await check("bounding boxes convert from bottom-left origin", geometryConversion)
