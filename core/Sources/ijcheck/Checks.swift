@@ -46,6 +46,7 @@ struct Checks {
         await robustnessChecks()
         await learningChecks()
         await namingChecks()
+        await providerChecks()
 
         print("\nGeometry")
         await check("bounding boxes convert from bottom-left origin", geometryConversion)

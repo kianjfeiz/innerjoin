@@ -78,7 +78,7 @@ that disagree, so it's a small fraction of extra calls. `ijparse settle` runs it
 ## Measuring it
 
 ```bash
-swift run ijcheck    # 242 checks, deterministic, no key
+swift run ijcheck    # 275 checks, deterministic, no key
 swift run ijeval     # score the pipeline against a known-truth corpus
 ```
 
@@ -135,18 +135,26 @@ fails full-text search.
 
 ## Models
 
-Any model, your key. Three ways in:
+Any model, your key. Naming a known service is enough — the address comes with it:
 
 ```bash
-IJ_PROVIDER=anthropic  IJ_MODEL=claude-sonnet-5        # Anthropic Messages API
-IJ_PROVIDER=openai     IJ_MODEL=gpt-4.1-mini           # OpenAI
-IJ_PROVIDER=openai     IJ_BASE_URL=http://localhost:11434/v1  # Ollama, LM Studio, vLLM…
+swift run ijparse key set openrouter    # paste the key when prompted
+swift run ijparse understand --provider openrouter --model deepseek/deepseek-chat
 ```
 
-The OpenAI-compatible adapter covers most of the world, including fully local models —
-so innerjoin can run end to end with nothing leaving the machine at all. Keys are read
-from `IJ_API_KEY` or the login keychain, and are never written to the database or the
-vault.
+`anthropic` speaks the Messages API; `openai`, `openrouter`, `groq`, `together`,
+`deepseek`, `ollama` and `lmstudio` all speak OpenAI's chat-completions dialect, which
+covers most of the world including fully local models — so innerjoin can run end to end
+with nothing leaving the machine at all. Anything else: `IJ_BASE_URL`.
+
+Keys are read from `IJ_API_KEY` or the login keychain, and are never written to the
+database, the vault, or your shell history.
+
+One wrinkle worth knowing: a router fronts dozens of models and only some accept a JSON
+schema. A model that rejects `response_format` outright would otherwise fail every
+document in the library, so that specific refusal is retried once without it — the
+prompt asks for JSON anyway, and the reply is salvaged from prose if it comes back that
+way. A bad key or an unknown model still fails loudly, which is the point.
 
 ## Readers
 

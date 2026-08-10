@@ -25,6 +25,17 @@ public enum ProviderError: LocalizedError {
         case .noContent:          return "The model returned nothing."
         }
     }
+
+    /// Whether a rejection is about the JSON schema we asked for rather than about us.
+    ///
+    /// Narrow on purpose: a malformed request, a bad key or an unknown model must still
+    /// fail loudly. Retrying those would only double the noise.
+    public static func isAboutTheSchema(_ complaint: String) -> Bool {
+        let lowered = complaint.lowercased()
+        return ["response_format", "json_schema", "structured output",
+                "structured_output", "json schema", "response format"]
+            .contains { lowered.contains($0) }
+    }
 }
 
 /// How to reach a model. Keys are never written to the database or the vault — they
@@ -61,7 +72,8 @@ public struct ProviderSettings: Sendable {
         let name = (environment["IJ_PROVIDER"] ?? "anthropic").lowercased()
         let kind: Kind = switch name {
         case "mock": .mock
-        case "openai", "openai-compatible", "ollama", "local": .openAICompatible
+        case "openai", "openai-compatible", "openrouter", "ollama", "local", "lmstudio",
+             "together", "groq", "deepseek", "vllm": .openAICompatible
         default: .anthropic
         }
 
@@ -70,10 +82,23 @@ public struct ProviderSettings: Sendable {
         case .openAICompatible: "gpt-4.1-mini"
         case .mock:             "mock"
         }
-        let defaultBase = switch kind {
-        case .anthropic:        "https://api.anthropic.com/v1/messages"
-        case .openAICompatible: "https://api.openai.com/v1/chat/completions"
-        case .mock:             "mock://local"
+        // The dialect is the same for all of these; only the address differs. Knowing
+        // the common ones means a working setup is a provider name and a key, with no
+        // URL to look up.
+        let defaultBase: String
+        switch name {
+        case "openrouter": defaultBase = "https://openrouter.ai/api/v1/chat/completions"
+        case "ollama":     defaultBase = "http://localhost:11434/v1/chat/completions"
+        case "lmstudio":   defaultBase = "http://localhost:1234/v1/chat/completions"
+        case "together":   defaultBase = "https://api.together.xyz/v1/chat/completions"
+        case "groq":       defaultBase = "https://api.groq.com/openai/v1/chat/completions"
+        case "deepseek":   defaultBase = "https://api.deepseek.com/v1/chat/completions"
+        default:
+            defaultBase = switch kind {
+            case .anthropic:        "https://api.anthropic.com/v1/messages"
+            case .openAICompatible: "https://api.openai.com/v1/chat/completions"
+            case .mock:             "mock://local"
+            }
         }
 
         let key = environment["IJ_API_KEY"] ?? Keychain.read(account: name)

@@ -55,7 +55,7 @@ struct OpenAICompatibleProvider: ModelProvider {
         // Strict mode requires this; harmless where it isn't supported.
         schemaWithClosedObjects["additionalProperties"] = false
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": settings.model,
             "max_tokens": maxTokens,
             "messages": [
@@ -75,10 +75,30 @@ struct OpenAICompatibleProvider: ModelProvider {
         if let key = settings.apiKey, !key.isEmpty {
             headers["Authorization"] = "Bearer \(key)"
         }
-        let data = try await HTTP.post(settings.baseURL, headers: headers, body: body)
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
+        var data: Data
+        do {
+            data = try await HTTP.post(settings.baseURL, headers: headers, body: body)
+        } catch ProviderError.http(let code, let complaint) where code == 400
+                    && ProviderError.isAboutTheSchema(complaint) {
+            // "Any model, bring your own key" means the fleet is heterogeneous: a router
+            // fronts dozens of models and only some of them accept a JSON schema. The
+            // ones that don't reject the whole request, which would fail every document
+            // in the library over a field we asked for politely. Drop it and ask again —
+            // the system prompt already demands JSON, and the reply is salvaged below
+            // either way. One extra round trip, once, beats an unusable provider.
+            body.removeValue(forKey: "response_format")
+            data = try await HTTP.post(settings.baseURL, headers: headers, body: body)
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ProviderError.malformed("the reply wasn't JSON")
+        }
+        // A router can answer 200 and put the failure in the body.
+        if let error = json["error"] as? [String: Any] {
+            throw ProviderError.malformed(error["message"] as? String ?? "the provider reported an error")
+        }
+        guard let choices = json["choices"] as? [[String: Any]],
               let message = choices.first?["message"] as? [String: Any],
               let text = message["content"] as? String else {
             throw ProviderError.malformed("unexpected response shape")

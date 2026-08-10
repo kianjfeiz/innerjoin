@@ -2,7 +2,7 @@
 
 _v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure handling, order of work._
 
-> **Status: stages 0–6 are built and passing** (242 checks) — see [core/](core/) and its [README](core/README.md).
+> **Status: stages 0–6 are built and passing** (275 checks) — see [core/](core/) and its [README](core/README.md).
 > Only stage 3 needs a model; everything else runs on-device. Stage 5b (embeddings) is
 > deliberately deferred until a real query is shown to fail on full-text search.
 >
