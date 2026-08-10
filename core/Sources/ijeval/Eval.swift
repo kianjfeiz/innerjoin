@@ -174,9 +174,16 @@ struct Report {
     /// Thresholds are the contract. Reading is deterministic so it must be near-perfect;
     /// the rest is allowed to degrade with noise, but never to collapse — and citations
     /// must *always* be valid, because a citation that opens nothing destroys trust.
+    /// Raised to just under what the pipeline actually achieves, so a regression trips
+    /// them rather than being absorbed by slack. The simulator is seeded, so these
+    /// numbers are deterministic — there's no flakiness to leave room for.
+    ///
+    /// Citations are the one that must be perfect. A wrong category is a nuisance a
+    /// person can see and correct; a citation that opens nothing is the app lying about
+    /// where a fact came from, and there's no recovering trust from that.
     var passed: Bool {
-        readRate >= 0.95 && factRate >= 0.90 && citationValidity >= 0.999
-            && entityRecall >= 0.85 && categoryPurity >= 0.80 && sceneryAdmitted == 0
+        readRate >= 0.99 && factRate >= 0.98 && citationValidity >= 0.999
+            && entityRecall >= 0.95 && categoryPurity >= 0.90 && sceneryAdmitted == 0
             && brokenFilesHandled == brokenFilesExpected
     }
 

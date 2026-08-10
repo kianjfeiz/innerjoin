@@ -21,7 +21,42 @@ swift run ijparse understand                # everything not yet understood
 swift run ijparse record 1                  # fields, dates, links, with pages
 swift run ijparse upcoming                  # dates read out of your documents
 swift run ijparse who "Osei"                # every file mentioning someone
+swift run ijparse tidy                      # merge duplicates, flag disagreements
+swift run ijparse sort                      # re-derive categories from the graph
+swift run ijparse graph                     # is the graph healthy or bloating?
 ```
+
+## Measuring it
+
+```bash
+swift run ijcheck    # 180 checks, deterministic, no key
+swift run ijeval     # score the pipeline against a known-truth corpus
+```
+
+`ijeval` builds twenty-two documents across four areas of a life, in six formats,
+plus three deliberately broken files — then runs them through a *simulated* model at
+0%, 40% and 90% error. The point isn't the score with a perfect model; it's how
+gently the numbers fall as the model gets worse, because that decay is the part we
+control.
+
+| | 0% error | 40% | 90% |
+|---|---|---|---|
+| files read | 100% | 100% | 100% |
+| facts preserved | 100% | 100% | 100% |
+| entities found | 100% | 100% | 100% |
+| scenery kept out | yes | yes | yes |
+| category purity | 94% | 94% | 91% |
+| citations valid | 100% | 100% | 100% |
+
+Citation validity is the one held at 100%: a wrong category is a nuisance someone can
+see and fix, but a citation that opens nothing is the app lying about where a fact
+came from.
+
+Four real defects came out of building this — role nouns formed by suffix
+(*policyholder*) and paperwork words (*Deposit*, *Balance*) becoming entities; short
+forms under four characters never merging, leaving 20% of entities as singletons; and
+clustering counting one shared name once per group member, so raising the bar for
+joining a category did nothing at all.
 
 Workspaces live at `~/Library/Application Support/innerjoin/Personal` by default;
 `-w <path>` picks another. A workspace is one folder: `innerjoin.sqlite` plus a
@@ -60,6 +95,9 @@ vault.
 
 | Format | How |
 |---|---|
+| Email `.eml` / `.emlx` | MIME multipart, quoted-printable and encoded-word decoding; quoted replies dropped, attachments named |
+| Spreadsheets `.xlsx` | Built-in zip reader, shared strings resolved, column gaps preserved |
+| Slides `.pptx` | Built-in zip reader, slides ordered numerically |
 | PDF with a text layer | PDFKit — exact text, coordinates from the page itself |
 | PDF without one, per page | rasterized at 200 dpi → Vision `RecognizeDocumentsRequest` |
 | Images | Vision, plus EXIF capture date |
@@ -167,12 +205,13 @@ Measured, not guessed — each of these was found by running adversarial documen
 
 | Limit | Effect |
 |---|---|
-| **Multi-column pages** merge into one block | Reading order usually survives, paragraph boundaries don't. Needs column detection. |
+| Multi-column pages: one paragraph may straddle the gutter | Reading order is correct — the gutter is found and each column read in turn — but PDFKit hands back an entire column glued to the first line of the next, and its glyph bounds are too unreliable to split on. |
+| A shared organization can pull a document into the wrong category | A car registration and a health policy naming the same insurer look connected. Requiring two shared entities fixes it but strands a third of the library in "Everything else", which is worse. |
 | Vision occasionally drops a table cell | Seen on both a rendered receipt and a text-layer table — one `Qty` cell came back empty. |
 | OCR misreads happen | "Fillmore" → "Filmore" on a rendered page. Text-layer PDFs are unaffected. |
 | Rotated pages ignore `page.rotation` | Coordinates would be wrong on a rotated scan. |
 | DOCX tables flatten | `NSAttributedString` doesn't expose table structure; needs real XML parsing. |
 | CSV: 500-row preview, no embedded newlines | Rows are split before quotes are parsed, so a quoted field containing a newline breaks. |
-| No reader yet | `.xlsx`, `.pptx`, `.eml`, `.msg`, video. |
+| No reader yet | `.msg`, video. |
 | Audio needs a language model | Downloaded on first use; offline afterwards. |
 | Entity resolution is exact-match only | "Alcon" and "Alcon Labs" stay separate until Stage 4 adds fuzzy matching. |
