@@ -9,7 +9,7 @@ struct IJParse: AsyncParsableCommand {
         abstract: "innerjoin's on-device preprocessor — read files into markdown and elements.",
         subcommands: [Add.self, Show.self, List.self, Find.self,
                       Understand.self, Record.self, Upcoming.self, Who.self,
-                      Graph.self, Tidy.self, Key.self],
+                      Graph.self, Tidy.self, Sort.self, Key.self],
         defaultSubcommand: Add.self
     )
 }
@@ -370,6 +370,37 @@ struct Tidy: AsyncParsableCommand {
             print("  \(conflict.field) · \(conflict.entity)")
             print("    \(conflict.older.title.padded(34)) \(conflict.older.value)")
             print("    \(conflict.newer.title.padded(34)) \(conflict.newer.value)  ← newer")
+        }
+    }
+}
+
+// MARK: - sort
+
+struct Sort: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "sort",
+        abstract: "Re-derive categories from the shape of the graph. No model needed.")
+
+    @OptionGroup var workspace: WorkspaceOption
+
+    mutating func run() async throws {
+        let store = try workspace.open()
+        let outcome = try await InnerjoinCore.Organize(store: store).run()
+
+        guard !outcome.categories.isEmpty else {
+            print("No clusters yet — needs at least \(InnerjoinCore.Organize.minimumMembers) records that share entities.")
+            print("\(outcome.holding) in \(InnerjoinCore.Organize.holdingCategory)")
+            return
+        }
+        for category in outcome.categories {
+            print("  \(category.name.padded(30)) \(category.members)")
+        }
+        if outcome.holding > 0 {
+            print("  \(InnerjoinCore.Organize.holdingCategory.padded(30)) \(outcome.holding)")
+        }
+        if !outcome.ignoredHubs.isEmpty {
+            // Worth surfacing: a hub is usually a sign extraction is naming scenery.
+            print("\nignored as too common to be meaningful: \(outcome.ignoredHubs.joined(separator: ", "))")
         }
     }
 }
