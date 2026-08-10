@@ -210,7 +210,14 @@ enum Corpus {
 
     static let questions: [Question] = [
         // Straight lookup, one document.
-        Question("how much is my monthly rent?", expects: "3,200"),
+        //
+        // Named precisely on purpose. "How much is my monthly rent?" was here first and
+        // failed two runs in three — and the system was right to hedge: the library holds
+        // a 2024 lease at $3,200, a notice raising it to $3,395 from July 2026, and a
+        // renewal. There is no single answer, so scoring one as correct was measuring my
+        // own carelessness. The conflict is worth testing, so it gets its own question
+        // below rather than being smuggled into this one.
+        Question("what monthly rent does the 2024 lease agreement state?", expects: "3,200"),
         Question("what is the security deposit on the lease?", expects: "4,800"),
         Question("when does my lease end?", expects: "2027-03-31"),
 
@@ -220,6 +227,11 @@ enum Corpus {
         // Requires the right date out of three.
         Question("what is the new rent after the increase?", expects: "3,395"),
         Question("by when do I have to object to the rent increase?", expects: "2026-06-01"),
+
+        // The library disagrees with itself, which is the normal case for anything that
+        // has ever been amended. Both figures are real and an answer that mentions only
+        // one is misleading.
+        Question("has the rent changed since the lease was signed?", expects: "3,395"),
 
         // Named party, not scenery.
         Question("who is my landlord?", expects: "Osei"),

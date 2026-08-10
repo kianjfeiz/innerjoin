@@ -18,6 +18,8 @@ _v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure ha
 > - **Relations are a closed enum**, not an open vocabulary; left open, models invent four spellings of one predicate.
 > - **Category naming needs no extra call** — the per-document guesses from stage 3 are aggregated as votes by the cluster.
 > - **Hub share is 0.6, not 0.4** — a library splits into a few groups, so the entity defining each one legitimately reaches ~50%.
+> - **Clustering uses two independent signals**, shared entities *and* TF-IDF text similarity between documents. Entities alone were unstable against a real model (44–100% purity across runs with nothing changed) because one entity can decide a document's cluster and a model names a slightly different set each reading. Words don't move between readings; the text signal is weighted below a shared name.
+> - **A document naming more than five entities doesn't bridge clusters.** A bank statement names everyone you dealt with all year, and through it every category fuses into one. It still gets filed; it just stops being evidence that two *other* documents are related.
 > - **Reasoning models are asked not to reason** for extraction (`reasoning: {enabled: false}` on OpenRouter). Measured: same answer, 306 output tokens versus 18, and on long documents the budget ran out mid-thought so the reply arrived empty.
 > - **Temperature is pinned to 0.** Two identical runs scored 93% and 57% on category purity before this, which makes every measurement a coin flip.
 > - **One name is one entity**, kind ignored. A company named after its founder merges with the founder; measured against that, not merging cost a severed graph and a third of the library unfiled.

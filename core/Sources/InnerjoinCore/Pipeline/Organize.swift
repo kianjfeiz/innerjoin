@@ -77,6 +77,11 @@ public struct Organize: Sendable {
     /// in one, and the names in it are a list rather than a relationship.
     static let maximumBridgingBreadth = 5
 
+    /// What a perfect textual match is worth beside a shared name. A shared entity of
+    /// average rarity scores in the low hundreds, so this puts strong similarity in the
+    /// same range without letting it dominate: direct evidence still wins.
+    static let similarityWeight = 400
+
     public static let holdingCategory = "Everything else"
 
     public init(store: Store) { self.store = store }
@@ -94,10 +99,11 @@ public struct Organize: Sendable {
             return Outcome(categories: [], holding: records.count, ignoredHubs: [])
         }
 
-        let (adjacency, entitiesByRecord, hubs) = try neighbours(of: records)
+        let (adjacency, entitiesByRecord, hubs, alike) = try neighbours(of: records)
         let communities = Self.propagateLabels(over: adjacency,
                                                records: records.compactMap(\.id),
-                                               entities: entitiesByRecord)
+                                               entities: entitiesByRecord,
+                                               alike: alike)
 
         // Group by community, then decide which are substantial enough to name.
         var members: [Int64: [Record]] = [:]
@@ -126,6 +132,7 @@ public struct Organize: Sendable {
                 holding += group.count
                 for record in group { if let id = record.id { assignments[id] = Self.holdingCategory } }
             }
+
         }
 
         let finalAssignments = assignments
@@ -144,12 +151,14 @@ public struct Organize: Sendable {
     /// Two records are neighbours when they're about the same entity, weighted by how
     /// many they share. Hub entities are left out entirely.
     public func neighbours(of records: [Record]) throws
-        -> (adjacency: [Int64: [Int64: Int]], entities: [Int64: Set<Int64>], hubs: [String])
+        -> (adjacency: [Int64: [Int64: Int]], entities: [Int64: Set<Int64>], hubs: [String],
+            alike: [Int64: Set<Int64>])
     {
         let total = records.count
         var adjacency: [Int64: [Int64: Int]] = [:]
         var entitiesByRecord: [Int64: Set<Int64>] = [:]
         var hubs: [String] = []
+        var stronglyAlike: [Int64: Set<Int64>] = [:]
 
         try store.dbQueue.read { db in
             // How many entities each record names. A lease names two or three; a bank
@@ -232,7 +241,39 @@ public struct Organize: Sendable {
                 }
             }
         }
-        return (adjacency, entitiesByRecord, hubs)
+
+        // ---- the second signal ----
+        //
+        // Everything above reads the graph the model built. This reads the documents
+        // themselves, which don't change between runs, and is what makes the result stop
+        // moving. Two rent invoices from the same landlord look alike whether or not
+        // extraction remembered to name him this time.
+        //
+        // Weighted below a shared name deliberately: a name is direct evidence, a shared
+        // vocabulary is circumstantial. It's here to hold a cluster together when the
+        // naming wobbles, not to form clusters of its own out of documents that merely
+        // rhyme.
+        let comparable: [(id: Int64, text: String)] = try store.dbQueue.read { db in
+            try records.compactMap { record in
+                guard let id = record.id else { return nil }
+                let markdown = try Document.fetchOne(db, key: record.documentID)?.markdown
+                return (id, store.comparableText(of: record, markdown: markdown))
+            }
+        }
+        for pair in Similarity.pairs(among: comparable) {
+            let weight = Int(pair.score * Double(Self.similarityWeight))
+            guard weight > 0 else { continue }
+            adjacency[pair.a, default: [:]][pair.b, default: 0] += weight
+            adjacency[pair.b, default: [:]][pair.a, default: 0] += weight
+            // A pair this alike is a reason to be together on its own, so a document
+            // isn't stranded just because nobody happened to be named on it.
+            if pair.score >= Similarity.strongThreshold {
+                stronglyAlike[pair.a, default: []].insert(pair.b)
+                stronglyAlike[pair.b, default: []].insert(pair.a)
+            }
+        }
+
+        return (adjacency, entitiesByRecord, hubs, stronglyAlike)
     }
 
     /// Label propagation: each record repeatedly adopts the label most common among
@@ -242,7 +283,8 @@ public struct Organize: Sendable {
     /// Ties break on the lowest id so the result is identical run to run — a category
     /// list that reshuffles for no reason would be worse than a slightly worse one.
     static func propagateLabels(over adjacency: [Int64: [Int64: Int]], records: [Int64],
-                                entities: [Int64: Set<Int64>] = [:]) -> [Int64: Int] {
+                                entities: [Int64: Set<Int64>] = [:],
+                                alike: [Int64: Set<Int64>] = [:]) -> [Int64: Int] {
         var labels: [Int64: Int] = [:]
         for (index, id) in records.sorted().enumerated() { labels[id] = index }
 
@@ -256,11 +298,17 @@ public struct Organize: Sendable {
                 // the group has three members.
                 var bridging: [Int: Set<Int64>] = [:]
                 let mine = entities[id] ?? []
+                // Groups this record reads like, which counts as a reason to join even
+                // when no name is shared — otherwise a document nobody was named on can
+                // never leave the holding pen however plainly it belongs somewhere.
+                var textuallyClose: Set<Int> = []
+                let close = alike[id] ?? []
 
                 for (neighbour, weight) in neighbours {
                     guard let label = labels[neighbour] else { continue }
                     weights[label, default: 0] += weight
                     bridging[label, default: []].formUnion(mine.intersection(entities[neighbour] ?? []))
+                    if close.contains(neighbour) { textuallyClose.insert(label) }
                 }
                 guard let best = weights.max(by: { ($0.value, -$0.key) < ($1.value, -$1.key) })?.key
                 else { continue }
@@ -269,7 +317,8 @@ public struct Organize: Sendable {
                 // and a health policy both naming the same insurer belong to different
                 // parts of a life; joining on that single tie is how unrelated documents
                 // get swept into a category and quietly make it untrustworthy.
-                if !entities.isEmpty, (bridging[best]?.count ?? 0) < minimumAttachment { continue }
+                if !entities.isEmpty, (bridging[best]?.count ?? 0) < minimumAttachment,
+                   !textuallyClose.contains(best) { continue }
                 if labels[id] != best { labels[id] = best; changed = true }
             }
             if !changed { break }
