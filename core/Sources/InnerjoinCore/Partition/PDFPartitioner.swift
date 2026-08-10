@@ -121,29 +121,45 @@ public struct PDFPartitioner: Partitioner {
         struct Line {
             var range: NSRange; var text: String
             var size: CGFloat; var isBold: Bool; var isBlank: Bool
+            /// Where the line starts on the page, normalized. Carried because a change
+            /// of left edge is the clearest sign of a new column or a new paragraph.
+            var x: Double; var y: Double
         }
         var lines: [Line] = []
         full.enumerateSubstrings(in: NSRange(location: 0, length: full.length),
                                  options: [.byLines, .substringNotRequired]) { _, range, _, _ in
-            let text = full.substring(with: range).trimmed
+            let text = full.substring(with: range)
+            if text.trimmed.isEmpty {
+                lines.append(Line(range: range, text: "", size: 0, isBold: false,
+                                  isBlank: true, x: 0, y: 0))
+                return
+            }
             let font = attributed.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+            let start = page.characterBounds(at: range.location)
             lines.append(Line(
-                range: range, text: text,
+                range: range, text: text.trimmed,
                 size: font?.pointSize ?? 0,
                 isBold: font?.fontDescriptor.symbolicTraits.contains(.bold) ?? false,
-                isBlank: text.isEmpty
+                isBlank: false,
+                x: Double((start.minX - bounds.minX) / bounds.width),
+                y: Double((bounds.maxY - start.maxY) / bounds.height)
             ))
         }
         guard lines.contains(where: { !$0.isBlank }) else { return [] }
 
         // Merge consecutive lines into a paragraph. A blank line, a size or weight
-        // change, or a bullet starts a new block.
+        // change, a bullet, or a jump in position starts a new block.
         var blocks: [[Line]] = []
         for line in lines {
             guard !line.isBlank else { blocks.append([]); continue }
             if var last = blocks.last, let previous = last.last,
                !Self.isBullet(line.text), !Self.isBullet(previous.text),
-               abs(previous.size - line.size) < 0.5, previous.isBold == line.isBold {
+               abs(previous.size - line.size) < 0.5, previous.isBold == line.isBold,
+               // A different left edge means a different column, or at least a
+               // different paragraph — either way, not a continuation of this one.
+               abs(previous.x - line.x) < 0.06,
+               // Text that jumps back up the page has started a new column.
+               line.y >= previous.y - 0.01 {
                 last.append(line)
                 blocks[blocks.count - 1] = last
             } else {
@@ -151,7 +167,7 @@ public struct PDFPartitioner: Partitioner {
             }
         }
 
-        return blocks.compactMap { block -> DraftElement? in
+        let drafted = blocks.compactMap { block -> DraftElement? in
             guard let first = block.first, let last = block.last else { return nil }
             let text = Self.join(block.map(\.text))
             guard !text.isEmpty else { return nil }
@@ -164,6 +180,7 @@ public struct PDFPartitioner: Partitioner {
                                               bodySize: bodySize, isBold: first.isBold)
             return DraftElement(kind, text, page: pageNumber, box: box, depth: depth)
         }
+        return Self.inReadingOrder(drafted)
     }
 
     /// Unions the character bounds across a range and converts PDF's bottom-left
@@ -184,6 +201,94 @@ public struct PDFPartitioner: Partitioner {
             width: Double(box.width / bounds.width),
             height: Double(box.height / bounds.height)
         )
+    }
+
+    /// Puts a page's blocks into the order a person would read them.
+    ///
+    /// PDF text comes out in drawing order, which for a two-column page can interleave
+    /// the columns line by line — the resulting prose is scrambled, and every sentence
+    /// spanning a column break is nonsense. Finding the gutter and reading one column
+    /// fully before the next is what fixes it.
+    static func inReadingOrder(_ elements: [DraftElement]) -> [DraftElement] {
+        let boxed = elements.compactMap { element -> (DraftElement, BBox)? in
+            element.box.map { (element, $0) }
+        }
+        // Without geometry there's nothing to reason about; keep what we were given.
+        guard boxed.count == elements.count, boxed.count > 3 else { return elements }
+
+        guard let gutter = verticalGutter(in: boxed.map(\.1)) else {
+            // Single column: plain top-to-bottom, left-to-right within a line.
+            return boxed.sorted { a, b in
+                abs(a.1.y - b.1.y) < 0.012 ? a.1.x < b.1.x : a.1.y < b.1.y
+            }.map(\.0)
+        }
+
+        // Full-width blocks — a banner headline, a footer — belong to neither column
+        // and must stay where they are relative to both.
+        func column(_ box: BBox) -> Int {
+            if box.x < gutter && box.x + box.width > gutter { return 0 }   // spans the gutter
+            return box.x + box.width <= gutter ? 1 : 2
+        }
+        let spanning = boxed.filter { column($0.1) == 0 }
+        let left = boxed.filter { column($0.1) == 1 }
+        let right = boxed.filter { column($0.1) == 2 }
+
+        // A page is only really two-column if both sides carry real content.
+        guard left.count >= 2, right.count >= 2 else {
+            return boxed.sorted { a, b in
+                abs(a.1.y - b.1.y) < 0.012 ? a.1.x < b.1.x : a.1.y < b.1.y
+            }.map(\.0)
+        }
+
+        // A full-width block above both columns is a heading; below them, a footer.
+        let columnsStart = left.map(\.1.y).min() ?? 1
+        let header = spanning.filter { $0.1.y < columnsStart }
+        let footer = spanning.filter { $0.1.y >= columnsStart }
+        func byHeight(_ items: [(DraftElement, BBox)]) -> [DraftElement] {
+            items.sorted { $0.1.y < $1.1.y }.map(\.0)
+        }
+        return byHeight(header) + byHeight(left) + byHeight(right) + byHeight(footer)
+    }
+
+    /// Finds the x position of a vertical channel that no block crosses.
+    ///
+    /// Only the middle of the page is considered — margins are empty by definition, and
+    /// treating a wide margin as a gutter would split a perfectly ordinary page in two.
+    static func verticalGutter(in boxes: [BBox]) -> Double? {
+        let steps = 100
+        var occupied = [Bool](repeating: false, count: steps)
+        for box in boxes {
+            let from = max(0, Int(box.x * Double(steps)))
+            let to = min(steps - 1, Int((box.x + box.width) * Double(steps)))
+            guard from <= to else { continue }
+            for index in from...to { occupied[index] = true }
+        }
+
+        // Look only between 25% and 75% of the width.
+        var best: (position: Double, width: Int)?
+        var runStart: Int?
+        for index in Int(0.25 * Double(steps))...Int(0.75 * Double(steps)) {
+            if occupied[index] {
+                if let start = runStart {
+                    let width = index - start
+                    if width > (best?.width ?? 0) {
+                        best = (Double(start + index) / 2.0 / Double(steps), width)
+                    }
+                    runStart = nil
+                }
+            } else if runStart == nil {
+                runStart = index
+            }
+        }
+        if let start = runStart {
+            let width = Int(0.75 * Double(steps)) - start
+            if width > (best?.width ?? 0) {
+                best = (Double(start) / Double(steps) + Double(width) / 2 / Double(steps), width)
+            }
+        }
+        // A gutter narrower than 3% of the page is just word spacing.
+        guard let best, best.width >= 3 else { return nil }
+        return best.position
     }
 
     /// Guesses whether a page holds a table, from geometry alone.

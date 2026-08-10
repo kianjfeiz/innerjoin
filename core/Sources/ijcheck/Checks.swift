@@ -27,6 +27,8 @@ struct Checks {
 
         await check("audio is transcribed with timestamps", audioTranscription)
 
+        await formatChecks()
+
         print("\nStage 2 · rendition")
         await check("rendition formats structure and anchors facts", renditionFormatting)
         await check("every anchor resolves to a real element", anchorsResolve)
