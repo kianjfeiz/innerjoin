@@ -33,20 +33,49 @@ public struct PDFPartitioner: Partitioner {
         // a page that's mostly headings would call heading size "normal".
         let bodySize = documentBodySize(of: pdf)
 
+        var tablePages = 0
+
         for index in 0..<pdf.pageCount {
             guard let page = pdf.page(at: index) else { continue }
             let pageNumber = index + 1
             let text = page.string ?? ""
+            let hasUsableTextLayer = text.trimmed.count >= textLayerThreshold
+                && !Self.looksLikeGarbage(text)
 
-            if text.trimmed.count >= textLayerThreshold {
-                elements.append(contentsOf: textLayerElements(of: page, pageNumber: pageNumber,
-                                                              bodySize: bodySize))
+            if hasUsableTextLayer {
+                var pageElements = textLayerElements(of: page, pageNumber: pageNumber,
+                                                     bodySize: bodySize)
+
+                // Second pass, only where it earns its cost. PDFKit gives exact
+                // characters but knows nothing about tables; Vision reconstructs table
+                // structure but can misread characters. On a page that looks tabular,
+                // take structure from Vision and text from the text layer everywhere else.
+                if looksTabular(page), let image = render(page) {
+                    let recognized = try await VisionReader.read(image: image, page: pageNumber)
+                    let tables = recognized.filter { $0.kind == .table }
+                    let tableBoxes = tables.compactMap(\.box)
+                    if !tableBoxes.isEmpty {
+                        tablePages += 1
+                        pageElements = pageElements.filter { element in
+                            guard let box = element.box else { return true }
+                            return !tableBoxes.contains { $0.contains(box) }
+                        }
+                        pageElements.append(contentsOf: tables)
+                        pageElements.sort { ($0.box?.y ?? 0) < ($1.box?.y ?? 0) }
+                    }
+                }
+                elements.append(contentsOf: pageElements)
+
             } else if let image = render(page) {
                 ocrPages += 1
                 elements.append(contentsOf: try await VisionReader.read(image: image, page: pageNumber))
             } else {
                 warnings.append("Page \(pageNumber) could not be read.")
             }
+        }
+
+        if tablePages > 0 {
+            warnings.append("Recovered tables on \(tablePages) page\(tablePages == 1 ? "" : "s").")
         }
 
         if ocrPages > 0 {
@@ -60,8 +89,6 @@ public struct PDFPartitioner: Partitioner {
 
     // MARK: - Text layer
 
-    /// Groups a page's text into paragraphs and headings, with coordinates taken
-    /// from the PDF itself — no OCR, so no recognition errors.
     /// The document's body text size: the size that the most *characters* are set in.
     ///
     /// Counting characters rather than lines is what makes this reliable — headings are
@@ -81,6 +108,8 @@ public struct PDFPartitioner: Partitioner {
         return charactersBySize.max { $0.value < $1.value }?.key ?? 0
     }
 
+    /// Groups a page's text into paragraphs and headings, with coordinates taken
+    /// from the PDF itself — no OCR, so no recognition errors.
     private func textLayerElements(of page: PDFPage, pageNumber: Int, bodySize: CGFloat) -> [DraftElement] {
         guard let attributed = page.attributedString, attributed.length > 0 else { return [] }
         let full = attributed.string as NSString
@@ -89,25 +118,32 @@ public struct PDFPartitioner: Partitioner {
 
         // Split into lines. Blank lines are kept as markers — they're the strongest
         // signal of a paragraph break, and dropping them merges unrelated text.
-        struct Line { var range: NSRange; var text: String; var size: CGFloat; var isBlank: Bool }
+        struct Line {
+            var range: NSRange; var text: String
+            var size: CGFloat; var isBold: Bool; var isBlank: Bool
+        }
         var lines: [Line] = []
         full.enumerateSubstrings(in: NSRange(location: 0, length: full.length),
                                  options: [.byLines, .substringNotRequired]) { _, range, _, _ in
             let text = full.substring(with: range).trimmed
-            let size = (attributed.attribute(.font, at: range.location, effectiveRange: nil)
-                        as? NSFont)?.pointSize ?? 0
-            lines.append(Line(range: range, text: text, size: size, isBlank: text.isEmpty))
+            let font = attributed.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont
+            lines.append(Line(
+                range: range, text: text,
+                size: font?.pointSize ?? 0,
+                isBold: font?.fontDescriptor.symbolicTraits.contains(.bold) ?? false,
+                isBlank: text.isEmpty
+            ))
         }
         guard lines.contains(where: { !$0.isBlank }) else { return [] }
 
-        // Merge consecutive same-size lines into a paragraph. A blank line, a size
+        // Merge consecutive lines into a paragraph. A blank line, a size or weight
         // change, or a bullet starts a new block.
         var blocks: [[Line]] = []
         for line in lines {
             guard !line.isBlank else { blocks.append([]); continue }
             if var last = blocks.last, let previous = last.last,
                !Self.isBullet(line.text), !Self.isBullet(previous.text),
-               abs(previous.size - line.size) < 0.5 {
+               abs(previous.size - line.size) < 0.5, previous.isBold == line.isBold {
                 last.append(line)
                 blocks[blocks.count - 1] = last
             } else {
@@ -117,14 +153,15 @@ public struct PDFPartitioner: Partitioner {
 
         return blocks.compactMap { block -> DraftElement? in
             guard let first = block.first, let last = block.last else { return nil }
-            let text = block.map(\.text).joined(separator: " ").trimmed
+            let text = Self.join(block.map(\.text))
             guard !text.isEmpty else { return nil }
 
             let span = NSRange(location: first.range.location,
                                length: NSMaxRange(last.range) - first.range.location)
             let box = boundingBox(of: span, on: page, in: bounds)
 
-            let (kind, depth) = Self.classify(text, size: first.size, bodySize: bodySize)
+            let (kind, depth) = Self.classify(text, size: first.size,
+                                              bodySize: bodySize, isBold: first.isBold)
             return DraftElement(kind, text, page: pageNumber, box: box, depth: depth)
         }
     }
@@ -147,6 +184,51 @@ public struct PDFPartitioner: Partitioner {
             width: Double(box.width / bounds.width),
             height: Double(box.height / bounds.height)
         )
+    }
+
+    /// Guesses whether a page holds a table, from geometry alone.
+    ///
+    /// Table rows leave wide horizontal gaps at the same x positions line after line.
+    /// Prose doesn't. Finding a gap column shared by several lines is a cheap, reliable
+    /// signal, and it costs nothing on the pages that don't have one.
+    private func looksTabular(_ page: PDFPage) -> Bool {
+        guard let text = page.string as NSString?, text.length > 0 else { return false }
+        let columnBucket: CGFloat = 12   // points; groups gaps that line up
+        var linesPerColumn: [Int: Int] = [:]
+
+        text.enumerateSubstrings(in: NSRange(location: 0, length: text.length),
+                                 options: [.byLines, .substringNotRequired]) { _, range, _, _ in
+            guard range.length > 8 else { return }
+            let line = text.substring(with: range) as NSString
+            let limit = min(range.length, 300)
+
+            // PDFKit doesn't leave a gap between columns — it *stretches the last glyph
+            // of a cell* so its bounds run all the way to the next column. In a table
+            // header, the "m" of "Item" comes back 204pt wide. So a column boundary is
+            // an abnormally wide character, and the boundary sits at its right edge.
+            var bounds: [CGRect] = []
+            for offset in 0..<limit {
+                let rect = page.characterBounds(at: range.location + offset)
+                if rect.width > 0 { bounds.append(rect) }
+            }
+            guard bounds.count > 4 else { return }
+            // Median is unaffected by the handful of stretched glyphs we're looking for.
+            let typical = bounds.map(\.width).sorted()[bounds.count / 2]
+            guard typical > 0 else { return }
+
+            var previousMaxX: CGFloat?
+            for rect in bounds {
+                if rect.width > typical * 3 {
+                    linesPerColumn[Int(rect.maxX / columnBucket), default: 0] += 1
+                } else if let previous = previousMaxX, rect.minX - previous > typical * 3 {
+                    linesPerColumn[Int(rect.minX / columnBucket), default: 0] += 1
+                }
+                previousMaxX = rect.maxX
+            }
+            _ = line
+        }
+        // Three rows sharing a column boundary is a table, not a coincidence.
+        return linesPerColumn.values.contains { $0 >= 3 }
     }
 
     // MARK: - Rasterize
@@ -178,15 +260,48 @@ public struct PDFPartitioner: Partitioner {
     /// Size wins over numbering: "14. Early Termination" set larger than the body is a
     /// heading, not a list item. Contracts and leases number their sections, and getting
     /// this backwards flattens a document's whole structure.
-    static func classify(_ text: String, size: CGFloat, bodySize: CGFloat)
+    ///
+    /// Weight matters as much as size. Plenty of contracts set headings in bold at body
+    /// size — without checking weight, every one of those disappears into the prose.
+    public static func classify(_ text: String, size: CGFloat, bodySize: CGFloat, isBold: Bool = false)
         -> (kind: ElementKind, depth: Int)
     {
         if bodySize > 0 {
             if size >= bodySize * 1.45 { return (.title, 0) }
             if size >= bodySize * 1.15 { return (.title, 1) }
         }
+        // Bold at body size is a heading only if it's short and isn't a sentence —
+        // otherwise emphasized sentences inside a paragraph would become headings.
+        if isBold, text.count <= 80, !text.hasSuffix("."), !isBullet(text) {
+            return (.title, 2)
+        }
         if isBullet(text) { return (.listItem, 0) }
         return (.text, 0)
+    }
+
+    /// Rejoins words split across a line break: "compre-\nhensive" → "comprehensive".
+    /// Left alone, the word is unsearchable and reads as two tokens to a model.
+    public static func join(_ lines: [String]) -> String {
+        var out = ""
+        for line in lines {
+            guard !out.isEmpty else { out = line; continue }
+            if out.hasSuffix("-"), let next = line.first, next.isLowercase {
+                out.removeLast()
+                out += line
+            } else {
+                out += " " + line
+            }
+        }
+        return out.trimmed
+    }
+
+    /// True when extracted text is mostly junk — broken font encodings produce
+    /// confident-looking garbage, which is worse than no text layer at all.
+    public static func looksLikeGarbage(_ text: String) -> Bool {
+        let sample = text.prefix(2000)
+        guard sample.count >= 40 else { return false }
+        let readable = sample.filter { $0.isLetter || $0.isNumber || $0.isWhitespace || $0.isPunctuation }
+        return Double(readable.count) / Double(sample.count) < 0.8
     }
 
     static func isBullet(_ text: String) -> Bool {

@@ -73,3 +73,39 @@ downstream has to think about it.
 - **Checks run as an executable** (`swift run ijcheck`) rather than a test target,
   because swift-testing and XCTest both need a full Xcode install to link. Worth
   revisiting once Xcode is installed for the app.
+
+## Redundancy
+
+There is exactly one second pass, and it exists because the two PDF readers have
+opposite strengths: PDFKit gives exact characters but knows nothing about tables;
+Vision reconstructs table structure but can misread characters. So when a page
+*looks* tabular, it's rasterized and read again, and only the table structure is
+taken from that pass — text everywhere else still comes from the text layer.
+
+Detecting "looks tabular" is geometric and cheap: PDFKit signals a column boundary by
+stretching the last glyph of a cell so its bounds run to the next column (the "m" in a
+header's "Item" comes back 204pt wide). Three rows sharing a boundary is a table.
+
+Everything else is a single pass. Running each reader twice would cost double and
+return the same answer — the failures worth defending against are logic errors and
+junk input, not flakiness. What guards those instead:
+
+- **Garbage text layers** (broken font encodings produce confident nonsense) are
+  detected and sent to recognition instead.
+- **Anchors are validated** — every `[eN]` in a rendition must resolve to a real element.
+- **Recognition confidence is recorded** per element, ready for a low-confidence
+  escalation once there's real data to set the threshold against.
+
+## Known limits
+
+Measured, not guessed — each of these was found by running adversarial documents.
+
+| Limit | Effect |
+|---|---|
+| **Multi-column pages** merge into one block | Reading order usually survives, paragraph boundaries don't. Needs column detection. |
+| Vision occasionally drops a table cell | Seen on both a rendered receipt and a text-layer table — one `Qty` cell came back empty. |
+| OCR misreads happen | "Fillmore" → "Filmore" on a rendered page. Text-layer PDFs are unaffected. |
+| Rotated pages ignore `page.rotation` | Coordinates would be wrong on a rotated scan. |
+| DOCX tables flatten | `NSAttributedString` doesn't expose table structure; needs real XML parsing. |
+| CSV: 500-row preview, no embedded newlines | Rows are split before quotes are parsed, so a quoted field containing a newline breaks. |
+| No reader yet | `.xlsx`, `.pptx`, `.eml`, `.msg`, audio, video. |

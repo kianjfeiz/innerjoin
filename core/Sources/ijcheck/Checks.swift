@@ -19,6 +19,12 @@ struct Checks {
         await check("delimited files keep quoted fields intact", quotedCSVFields)
         await check("markdown structure is preserved", markdownStructure)
 
+        print("\nStage 1 · hard cases")
+        await check("bold headings at body size are still headings", boldHeadings)
+        await check("words split across line breaks are rejoined", hyphenation)
+        await check("tables in text-layer pdfs are recovered", textLayerTables)
+        await check("garbled text layers are recognized as junk", garbageDetection)
+
         print("\nStage 2 · rendition")
         await check("rendition formats structure and anchors facts", renditionFormatting)
         await check("every anchor resolves to a real element", anchorsResolve)
@@ -179,6 +185,61 @@ private func markdownStructure() async throws {
                      "markdown headings become titles")
         await expect(elements.contains { $0.kind == .listItem }, "bullets become list items")
     }
+}
+
+// MARK: - Stage 1 · hard cases
+//
+// Each of these was a real failure caught by running adversarial documents through
+// the reader. They're kept as checks so the fixes can't quietly regress.
+
+private func boldHeadings() async throws {
+    try await withWorkspace { store in
+        let result = try await Ingest(store: store).add(fileAt: try fixture("bold_headings.pdf"))
+        let elements = try store.elements(of: try require(result.document.id, "document id"))
+        let titles = elements.filter { $0.kind == .title }.map(\.text)
+
+        // Contracts routinely set headings bold at body size. Judging on size alone
+        // dissolved these into the surrounding prose.
+        await expect(titles.contains("Termination"), "a bold heading at body size is a heading")
+        await expect(titles.contains("Governing Law"), "and so is the next one")
+        await expect(elements.count >= 4, "headings and bodies stay separate blocks")
+    }
+}
+
+private func hyphenation() async throws {
+    try await withWorkspace { store in
+        let result = try await Ingest(store: store).add(fileAt: try fixture("hyphenation.pdf"))
+        let markdown = try require(result.document.markdown, "markdown")
+        // Left broken, "compre- hensive" is unsearchable and reads as two tokens.
+        await expect(markdown.contains("comprehensive"), "a hyphenated word is rejoined")
+        await expect(markdown.contains("insurance"), "and the next one")
+        await expect(!markdown.contains("- hensive"), "no orphaned fragments remain")
+    }
+}
+
+private func textLayerTables() async throws {
+    try await withWorkspace { store in
+        let result = try await Ingest(store: store).add(fileAt: try fixture("text_table.pdf"))
+        let elements = try store.elements(of: try require(result.document.id, "document id"))
+
+        // PDFKit reads characters but knows nothing about tables, so a tabular page
+        // gets a second pass through Vision purely for its structure.
+        let table = try require(elements.first { $0.kind == .table }, "a recovered table")
+        await expect(table.text.contains("| Surgical gloves |"), "rows come back as rows")
+        await expect(table.text.contains("$216.00"), "amounts land in their cells")
+        await expect(result.document.problem?.contains("Recovered tables") == true,
+                     "the second pass is reported honestly")
+    }
+}
+
+private func garbageDetection() async throws {
+    // A broken font encoding yields confident-looking nonsense. Better to treat it as
+    // no text layer and let recognition try than to store junk.
+    await expect(PDFPartitioner.looksLikeGarbage(String(repeating: "\u{FFFD}\u{0001}", count: 40)),
+                 "control characters and replacement marks read as junk")
+    await expect(!PDFPartitioner.looksLikeGarbage(
+        "Tenant shall pay $3,200.00 per month, due on the first day of each month."),
+                 "ordinary prose is not junk")
 }
 
 // MARK: - Stage 2
