@@ -1,0 +1,7 @@
+.DS_Store
+core/.build/
+core/.swiftpm/
+*.xcuserstate
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

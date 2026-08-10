@@ -1,0 +1,430 @@
+<title>innerjoin — exploration 03 · beyond chat</title>
+<style>
+  :root {
+    --ink: #0B0C0E;
+    --gray-1: #6E7076;
+    --gray-2: #979AA1;
+    --hairline: rgba(18, 24, 34, 0.13);
+    --hairline-soft: rgba(18, 24, 34, 0.07);
+    --sky: #54C7FF;
+    --blue: #2E7CF6;
+    --blue-deep: #1E63D6;
+    --amber: #E09B14;
+    --green: #1FAD37;
+    --grad-accent: linear-gradient(135deg, #54C7FF 0%, #2E7CF6 100%);
+    --grad-tint: linear-gradient(90deg, rgba(84, 199, 255, 0.20), rgba(46, 124, 246, 0.12));
+    --grad-card: linear-gradient(180deg, #FFFFFF, #FBFBF9);
+    --skywash: linear-gradient(175deg, rgba(84, 199, 255, 0.20) 0%, rgba(255, 255, 255, 0.10) 48%, rgba(255, 246, 189, 0.24) 100%);
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  }
+  html { background: #F5F4F1; }
+  body { margin: 0; background: linear-gradient(180deg, #E9F6FD 0%, #F8F7F4 260px, #F1EFEB 100%); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  .canvas { max-width: 880px; margin: 0 auto; padding: 28px 22px 52px; display: flex; flex-direction: column; gap: 30px; }
+
+  .lede { display: flex; flex-direction: column; gap: 7px; }
+  .lede h1 { font-size: 19px; font-weight: 700; letter-spacing: -0.025em; margin: 0; }
+  .lede p { font-size: 13px; line-height: 1.6; color: var(--gray-1); margin: 0; max-width: 68ch; }
+  .lede p b { color: var(--ink); font-weight: 600; }
+
+  .sec-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .sec-num { font-family: var(--mono); font-size: 10.5px; color: var(--blue-deep); font-weight: 600; }
+  .sec-name { font-size: 13.5px; font-weight: 600; margin: 0; }
+  .sec-note { font-size: 12px; color: var(--gray-2); }
+  section { display: flex; flex-direction: column; gap: 11px; }
+
+  .window { background: var(--grad-card); border-radius: 12px; border: 1px solid var(--hairline); box-shadow: 0 16px 40px rgba(24, 44, 70, 0.10), 0 2px 8px rgba(24, 44, 70, 0.05); overflow: hidden; }
+  .toolbar { display: flex; align-items: center; gap: 11px; padding: 9px 13px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(240, 248, 252, 0.88)); }
+  .lights { display: flex; gap: 6.5px; }
+  .light { width: 11px; height: 11px; border-radius: 50%; }
+  .l-r { background: radial-gradient(circle at 35% 30%, #FF8A80, #FF5F57 70%); }
+  .l-y { background: radial-gradient(circle at 35% 30%, #FFD879, #FEBC2E 70%); }
+  .l-g { background: radial-gradient(circle at 35% 30%, #6FE08A, #28C840 70%); }
+  .tb-title { font-size: 12px; font-weight: 600; }
+  .tb-title span { color: var(--gray-2); font-weight: 400; }
+  .tb-spacer { flex: 1; }
+  .tb-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--gray-1); border: 1px solid var(--hairline); border-radius: 999px; padding: 2.5px 9px; background: linear-gradient(180deg, #FFFFFF, #F7FAFC); }
+  .tb-chip .kbd { font-family: var(--mono); font-size: 9.5px; color: var(--gray-2); }
+
+  .win-body { display: grid; grid-template-columns: 192px minmax(0, 1fr); border-top: 1px solid var(--hairline-soft); }
+  .sidebar { background-color: #F2F1EE; background-image: var(--skywash); border-right: 1px solid var(--hairline-soft); padding: 9px 8px 8px; display: flex; flex-direction: column; gap: 1px; }
+  .ws-card { background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.72)); border: 1px solid var(--hairline); border-radius: 9px; padding: 7px 9px 8px; margin-bottom: 9px; display: flex; flex-direction: column; gap: 4px; box-shadow: 0 1px 3px rgba(24, 44, 70, 0.06); }
+  .ws-top { display: flex; align-items: center; justify-content: space-between; }
+  .ws-name { font-size: 12px; font-weight: 600; }
+  .ws-name .chev { color: var(--gray-2); font-size: 8.5px; }
+  .ws-join { font-size: 12.5px; font-weight: 700; background: var(--grad-accent); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .ws-sub { font-family: var(--mono); font-size: 9px; color: var(--gray-2); }
+  .ws-strip { display: block; height: 3px; border-radius: 2px; background: rgba(18, 24, 34, 0.06); overflow: hidden; }
+  .ws-strip-fill { display: block; height: 100%; width: 68%; border-radius: 2px; background: var(--grad-accent); }
+  .siderow { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 4.5px 8px; border-radius: 7px; color: var(--ink); }
+  .siderow svg { flex: none; color: var(--gray-1); }
+  .siderow.sel { background: var(--grad-tint); font-weight: 500; }
+  .siderow.sel svg { color: var(--blue-deep); }
+  .siderow .badge { margin-left: auto; font-size: 10px; background: linear-gradient(180deg, rgba(18, 24, 34, 0.07), rgba(18, 24, 34, 0.10)); color: var(--gray-1); border-radius: 999px; padding: 0.5px 6.5px; font-variant-numeric: tabular-nums; }
+  .side-label { font-size: 10px; font-weight: 600; color: var(--gray-2); text-transform: uppercase; letter-spacing: 0.04em; margin: 11px 8px 4px; }
+  .catrow { display: flex; align-items: center; gap: 8px; padding: 4.5px 8px 5px; border-radius: 7px; }
+  .catrow.sel { background: var(--grad-tint); }
+  .stack { position: relative; width: 12px; height: 12px; flex: none; }
+  .stack span { position: absolute; width: 7.5px; height: 7.5px; border-radius: 2.5px; display: block; }
+  .stack .s1 { left: 0; top: 0; background: linear-gradient(135deg, #B9E7FF, #54C7FF); }
+  .stack .s2 { right: 0; bottom: 0; background: linear-gradient(135deg, #54C7FF, #2E7CF6); box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.85); }
+  .cat-main { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .cat-line { display: flex; justify-content: space-between; align-items: baseline; }
+  .cat-name { font-size: 12px; }
+  .cat-count { font-family: var(--mono); font-size: 9.5px; color: var(--gray-2); font-variant-numeric: tabular-nums; }
+  .volbar { display: block; height: 2.5px; border-radius: 2px; background: rgba(18, 24, 34, 0.055); overflow: hidden; }
+  .vol { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, #54C7FF, #2E7CF6); }
+  .side-foot { margin-top: auto; font-size: 10px; color: var(--gray-2); padding: 8px 8px 1px; line-height: 1.5; border-top: 1px solid var(--hairline-soft); }
+
+  .stage { background: linear-gradient(180deg, #FFFFFF 0%, #FCFCFA 80%, rgba(233, 246, 253, 0.5) 100%); padding: 15px 17px 17px; display: flex; flex-direction: column; gap: 13px; min-width: 0; }
+
+  .brief-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .brief-h { font-size: 21px; font-weight: 700; letter-spacing: -0.03em; margin: 0; }
+  .brief-h span { background: var(--grad-accent); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .brief-sub { font-size: 11.5px; color: var(--gray-1); margin: 3px 0 0; }
+  .brief-meta { font-family: var(--mono); font-size: 10px; color: var(--gray-2); text-align: right; line-height: 1.5; }
+
+  .block { border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; background: linear-gradient(180deg, #FFFFFF, #FCFCFA); }
+  .block-head { display: flex; align-items: center; gap: 7px; padding: 7px 11px; border-bottom: 1px solid var(--hairline-soft); background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 250, 252, 0.85)); }
+  .block-title { font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--gray-1); }
+  .block-count { font-family: var(--mono); font-size: 10px; color: var(--gray-2); margin-left: auto; }
+
+  .row { display: flex; align-items: center; gap: 10px; padding: 7px 11px; border-bottom: 1px solid var(--hairline-soft); }
+  .row:last-child { border-bottom: none; }
+  .row:hover { background: rgba(84, 199, 255, 0.05); }
+  .when { font-family: var(--mono); font-size: 10px; color: var(--gray-2); width: 52px; flex: none; font-variant-numeric: tabular-nums; }
+  .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1.5px; }
+  .row-t { font-size: 12.5px; }
+  .row-t b { font-weight: 600; }
+  .row-s { font-size: 10.5px; color: var(--gray-2); }
+  .row-s .src { font-family: var(--mono); }
+  .lozenge { font-size: 10px; border-radius: 999px; padding: 1.5px 8px; border: 1px solid var(--hairline); background: linear-gradient(180deg, #FFFFFF, #F7FAFC); color: var(--gray-1); flex: none; }
+  .loz-soon { border-color: rgba(224, 155, 20, 0.4); background: linear-gradient(180deg, rgba(255, 246, 189, 0.5), rgba(255, 240, 160, 0.35)); color: #8A5D08; }
+  .loz-blue { border-color: rgba(46, 124, 246, 0.4); background: var(--grad-tint); color: var(--blue-deep); }
+  .countdown { font-family: var(--mono); font-size: 11px; color: var(--gray-1); font-variant-numeric: tabular-nums; flex: none; }
+
+  .two-up { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 11px; }
+
+  .suggest { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sug-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--gray-2); width: 100%; }
+  .sug { font-size: 11.5px; border: 1px solid var(--hairline); border-radius: 999px; padding: 4px 11px; background: linear-gradient(180deg, #FFFFFF, #F7FAFC); color: var(--gray-1); cursor: pointer; }
+  .sug:hover { border-color: rgba(46, 124, 246, 0.45); color: var(--blue-deep); }
+
+  .dossier-hero { display: flex; align-items: flex-start; gap: 12px; }
+  .dossier-mark { width: 42px; height: 42px; border-radius: 10px; background: var(--skywash), linear-gradient(135deg, #DCF1FD, #EAF4FF); border: 1px solid var(--hairline); display: flex; align-items: center; justify-content: center; flex: none; }
+  .dossier-mark svg { color: var(--blue-deep); }
+  .dossier-t { flex: 1; min-width: 0; }
+  .dossier-t h2 { font-size: 19px; font-weight: 700; letter-spacing: -0.03em; margin: 0; }
+  .dossier-t p { font-size: 11.5px; color: var(--gray-1); margin: 2px 0 0; }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 7px; }
+  .fact { border: 1px solid var(--hairline); border-radius: 9px; padding: 7px 10px 8px; background: linear-gradient(180deg, #FFFFFF, #FAFCFD); display: flex; flex-direction: column; gap: 2px; }
+  .fact-k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--gray-2); font-weight: 600; }
+  .fact-v { font-size: 14px; font-weight: 600; letter-spacing: -0.015em; }
+  .fact-v.sm { font-size: 12.5px; font-weight: 500; }
+  .fact-src { font-family: var(--mono); font-size: 9px; color: var(--blue-deep); }
+
+  .tl { display: flex; align-items: stretch; gap: 0; border: 1px solid var(--hairline); border-radius: 9px; overflow: hidden; background: linear-gradient(180deg, #FFFFFF, #FBFCFD); }
+  .tl-item { flex: 1; padding: 7px 9px; border-right: 1px solid var(--hairline-soft); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .tl-item:last-child { border-right: none; }
+  .tl-item:hover { background: rgba(84, 199, 255, 0.06); }
+  .tl-date { font-family: var(--mono); font-size: 9px; color: var(--gray-2); }
+  .tl-name { font-size: 11px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tl-dot { width: 6px; height: 6px; border-radius: 50%; margin-bottom: 1px; }
+  .d-pdf { background: radial-gradient(circle at 35% 30%, #9AD9FF, #2E7CF6); }
+  .d-eml { background: radial-gradient(circle at 35% 30%, #FFD879, #F0A61E); }
+  .d-img { background: radial-gradient(circle at 35% 30%, #6FE08A, #1FAD37); }
+
+  .linked { display: flex; gap: 6px; flex-wrap: wrap; }
+  .ent { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--hairline); border-radius: 999px; padding: 3px 10px 3px 4px; font-size: 11.5px; background: linear-gradient(180deg, #FFFFFF, #F8FAFB); cursor: pointer; }
+  .ent:hover { border-color: rgba(46, 124, 246, 0.45); }
+  .ent .av { width: 17px; height: 17px; border-radius: 50%; background: var(--grad-accent); color: #fff; font-size: 8.5px; font-weight: 600; display: flex; align-items: center; justify-content: center; flex: none; }
+  .ent .n { font-size: 10px; color: var(--gray-2); font-family: var(--mono); }
+
+  .tbl-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .fpill { font-size: 11px; border: 1px solid var(--hairline); border-radius: 999px; padding: 3px 10px; background: linear-gradient(180deg, #FFFFFF, #F7FAFC); color: var(--gray-1); }
+  .fpill.on { border-color: rgba(46, 124, 246, 0.45); background: var(--grad-tint); color: var(--blue-deep); font-weight: 500; }
+  .tbl-spacer { flex: 1; }
+  .exp { font-size: 11px; border: 1px solid var(--hairline); border-radius: 7px; padding: 3.5px 10px; background: linear-gradient(135deg, #54C7FF, #2E7CF6); color: #fff; font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  thead th { text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--gray-2); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--hairline); background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(247, 250, 252, 0.8)); }
+  tbody td { padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: rgba(84, 199, 255, 0.05); }
+  .num { font-variant-numeric: tabular-nums; text-align: right; font-weight: 500; }
+  .cell-mono { font-family: var(--mono); font-size: 10.5px; color: var(--gray-1); }
+  .cell-src { font-family: var(--mono); font-size: 10px; color: var(--blue-deep); }
+  .tbl-foot { display: flex; justify-content: space-between; padding: 6px 11px; font-size: 10.5px; color: var(--gray-2); border-top: 1px solid var(--hairline); font-variant-numeric: tabular-nums; }
+
+  .palette-wrap { position: relative; height: 232px; border: 1px solid var(--hairline); border-radius: 11px; overflow: hidden; background: var(--skywash), linear-gradient(180deg, #EEF6FB, #F6F4EF); display: flex; align-items: flex-start; justify-content: center; padding-top: 26px; }
+  .palette { width: 360px; max-width: 88%; background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(250, 252, 253, 0.95)); border: 1px solid var(--hairline); border-radius: 11px; box-shadow: 0 16px 40px rgba(24, 44, 70, 0.18); overflow: hidden; }
+  .pal-input { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--hairline-soft); }
+  .pal-input .q { font-size: 13px; flex: 1; }
+  .pal-input .caret { width: 1.5px; height: 14px; background: var(--blue); }
+  .pal-sec { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--gray-2); font-weight: 600; padding: 6px 12px 3px; }
+  .pal-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; font-size: 12px; }
+  .pal-row.sel { background: var(--grad-tint); }
+  .pal-row .pal-meta { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--gray-2); }
+  .pal-row .mini { width: 13px; height: 13px; border-radius: 4px; background: linear-gradient(135deg, #B9E7FF, #2E7CF6); flex: none; }
+  .pal-ans { padding: 6px 12px 9px; font-size: 12px; line-height: 1.5; }
+  .pal-ans b { font-weight: 600; }
+
+  .verdict { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+  .vcard { border: 1px solid var(--hairline); border-radius: 10px; padding: 11px 13px; background: linear-gradient(160deg, #FFFFFF 40%, rgba(84, 199, 255, 0.10)); display: flex; flex-direction: column; gap: 5px; }
+  .vcard h3 { font-size: 12.5px; font-weight: 600; margin: 0; }
+  .vcard p { font-size: 11.5px; line-height: 1.5; color: var(--gray-1); margin: 0; }
+  .vcard .tag { font-family: var(--mono); font-size: 9.5px; color: var(--blue-deep); }
+
+  .tokens { font-family: var(--mono); font-size: 10.5px; color: var(--gray-2); border-top: 1px solid var(--hairline); padding-top: 12px; line-height: 1.65; margin: 0; }
+  .tokens b { color: var(--gray-1); font-weight: 600; }
+
+  @media (max-width: 720px) {
+    .win-body { grid-template-columns: 1fr; }
+    .sidebar { border-right: none; border-bottom: 1px solid var(--hairline-soft); }
+    .two-up { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition-duration: 0.001s !important; } }
+</style>
+
+<div class="canvas">
+
+  <div class="lede">
+    <h1>innerjoin — exploration 03 · what it looks like when chat isn't the front door</h1>
+    <p>The problem with a chat box on 200 files: <b>you have to already know what to ask.</b> A blank prompt puts the burden of knowing what's in the library on the person who dumped it there precisely because they didn't want to keep track. These three surfaces invert that — the app opens by telling you what it found, what's coming, and what looks off. Chat doesn't disappear; it moves to ⌘K, where you go when you have a specific question.</p>
+  </div>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">01</span><p class="sec-name">Home is a briefing, not a prompt</p><span class="sec-note">— the app talks first</span></div>
+    <div class="window">
+      <div class="toolbar">
+        <div class="lights"><span class="light l-r"></span><span class="light l-y"></span><span class="light l-g"></span></div>
+        <span class="tb-title">Today <span>· Personal</span></span>
+        <span class="tb-spacer"></span>
+        <span class="tb-chip">Ask <span class="kbd">⌘K</span></span>
+      </div>
+      <div class="win-body">
+        <div class="sidebar">
+          <div class="ws-card">
+            <div class="ws-top"><span class="ws-name">Personal <span class="chev">▾</span></span><span class="ws-join">⋈</span></div>
+            <span class="ws-sub">203 records · 4.1 GB</span>
+            <span class="ws-strip"><span class="ws-strip-fill"></span></span>
+          </div>
+          <div class="siderow sel"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 6.5L7 2L12 6.5V12H2V6.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Today</div>
+          <div class="siderow"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.3"/><path d="M7 4.2V7L9 8.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Timeline</div>
+          <div class="siderow"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2.2" stroke="currentColor" stroke-width="1.2"/><circle cx="10" cy="9.5" r="2.2" stroke="currentColor" stroke-width="1.2"/><line x1="6.3" y1="5.9" x2="8.4" y2="8.2" stroke="currentColor" stroke-width="1.2"/></svg>People &amp; places <span class="badge">37</span></div>
+          <div class="siderow"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M1.5 8H4.5L5.5 9.5H8.5L9.5 8H12.5" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 3.5H11.5L12.5 8V11.5H1.5V8L2.5 3.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Inbox <span class="badge">2</span></div>
+          <p class="side-label">Library</p>
+          <div class="catrow"><span class="stack" aria-hidden="true"><span class="s1"></span><span class="s2"></span></span><span class="cat-main"><span class="cat-line"><span class="cat-name">Finances</span><span class="cat-count">128</span></span><span class="volbar"><span class="vol" style="width: 100%"></span></span></span></div>
+          <div class="catrow"><span class="stack" aria-hidden="true"><span class="s1"></span><span class="s2"></span></span><span class="cat-main"><span class="cat-line"><span class="cat-name">Apartment</span><span class="cat-count">23</span></span><span class="volbar"><span class="vol" style="width: 18%"></span></span></span></div>
+          <div class="catrow"><span class="stack" aria-hidden="true"><span class="s1"></span><span class="s2"></span></span><span class="cat-main"><span class="cat-line"><span class="cat-name">Health</span><span class="cat-count">12</span></span><span class="volbar"><span class="vol" style="width: 9%"></span></span></span></div>
+          <div class="catrow"><span class="stack" aria-hidden="true"><span class="s1"></span><span class="s2"></span></span><span class="cat-main"><span class="cat-line"><span class="cat-name">Travel</span><span class="cat-count">9</span></span><span class="volbar"><span class="vol" style="width: 7%"></span></span></span></div>
+          <div class="side-foot">Everything stays on this Mac.<br>Indexed 4 min ago</div>
+        </div>
+        <div class="stage">
+          <div class="brief-head">
+            <div>
+              <h2 class="brief-h">Friday. <span>Three things</span> want your attention.</h2>
+              <p class="brief-sub">Nothing here was typed by you — it was read out of your files.</p>
+            </div>
+            <span class="brief-meta">aug 7, 2026<br>4 new records</span>
+          </div>
+
+          <div class="block">
+            <div class="block-head"><span class="block-title">Coming up</span><span class="block-count">from 6 documents</span></div>
+            <div class="row">
+              <span class="when">sep 30</span>
+              <span class="row-main"><span class="row-t"><b>Notice deadline</b> to break your lease penalty-free</span><span class="row-s">60 days before Nov 29 · <span class="src">lease_final.pdf §14</span> ⋈ <span class="src">Re: lease amendment</span></span></span>
+              <span class="lozenge loz-soon">54 days</span>
+            </div>
+            <div class="row">
+              <span class="when">oct 12</span>
+              <span class="row-main"><span class="row-t"><b>AppleCare+</b> on MacBook Pro expires</span><span class="row-s">purchased Oct 12, 2023 · <span class="src">apple_receipt.pdf</span></span></span>
+              <span class="countdown">66 days</span>
+            </div>
+            <div class="row">
+              <span class="when">jan 15</span>
+              <span class="row-main"><span class="row-t"><b>Passport</b> inside the 6-month travel window</span><span class="row-s">expires Jul 15, 2027 · <span class="src">IMG_0912.heic</span></span></span>
+              <span class="countdown">161 days</span>
+            </div>
+          </div>
+
+          <div class="two-up">
+            <div class="block">
+              <div class="block-head"><span class="block-title">Worth a look</span><span class="block-count">3</span></div>
+              <div class="row">
+                <span class="row-main"><span class="row-t">Two documents disagree on your <b>break penalty</b></span><span class="row-s">lease says 2 months · email says 1</span></span>
+                <span class="lozenge loz-blue">⋈</span>
+              </div>
+              <div class="row">
+                <span class="row-main"><span class="row-t"><b>Figma</b> renewed 40% higher than last year</span><span class="row-s">$180 → $252 · 2 receipts</span></span>
+              </div>
+              <div class="row">
+                <span class="row-main"><span class="row-t">Same invoice appears <b>twice</b></span><span class="row-s">A-2231 · scan + email attachment</span></span>
+              </div>
+            </div>
+            <div class="block">
+              <div class="block-head"><span class="block-title">Just read</span><span class="block-count">4 files</span></div>
+              <div class="row">
+                <span class="when">2m</span>
+                <span class="row-main"><span class="row-t">insurance_2026.pdf</span><span class="row-s">→ policy · premium, deductible, term</span></span>
+                <span class="lozenge">Health</span>
+              </div>
+              <div class="row">
+                <span class="when">2m</span>
+                <span class="row-main"><span class="row-t">IMG_2214.heic</span><span class="row-s">→ member card · id, group, plan</span></span>
+                <span class="lozenge">Health</span>
+              </div>
+              <div class="row">
+                <span class="when">11m</span>
+                <span class="row-main"><span class="row-t">chase_stmt_jul.csv</span><span class="row-s">→ 214 transactions · 31 vendors</span></span>
+                <span class="lozenge">Finances</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="suggest">
+            <span class="sug-label">Because you added those</span>
+            <span class="sug">What's my deductible this year?</span>
+            <span class="sug">Which subscriptions went up?</span>
+            <span class="sug">Total spent on the apartment</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">02</span><p class="sec-name">Every thing in your life gets a page</p><span class="sec-note">— the join, made browsable</span></div>
+    <div class="window">
+      <div class="toolbar">
+        <div class="lights"><span class="light l-r"></span><span class="light l-y"></span><span class="light l-g"></span></div>
+        <span class="tb-title">People &amp; places <span>· 1247 Fillmore St</span></span>
+        <span class="tb-spacer"></span>
+        <span class="tb-chip">Ask <span class="kbd">⌘K</span></span>
+      </div>
+      <div class="win-body">
+        <div class="sidebar">
+          <div class="ws-card">
+            <div class="ws-top"><span class="ws-name">Personal <span class="chev">▾</span></span><span class="ws-join">⋈</span></div>
+            <span class="ws-sub">203 records · 4.1 GB</span>
+            <span class="ws-strip"><span class="ws-strip-fill"></span></span>
+          </div>
+          <div class="siderow"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 6.5L7 2L12 6.5V12H2V6.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>Today</div>
+          <div class="siderow"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.3"/><path d="M7 4.2V7L9 8.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Timeline</div>
+          <div class="siderow sel"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true"><circle cx="4.5" cy="4.5" r="2.2" stroke="currentColor" stroke-width="1.2"/><circle cx="10" cy="9.5" r="2.2" stroke="currentColor" stroke-width="1.2"/><line x1="6.3" y1="5.9" x2="8.4" y2="8.2" stroke="currentColor" stroke-width="1.2"/></svg>People &amp; places <span class="badge">37</span></div>
+          <p class="side-label">Recent</p>
+          <div class="catrow sel"><span class="stack" aria-hidden="true"><span class="s1"></span><span class="s2"></span></span><span class="cat-main"><span class="cat-line"><span class="cat-name">1247 Fillmore</span><span class="cat-count">23</span></span><span class="volbar"><span class="vol" style="width: 62%"></span></span></span></div>
+          <div class="catrow"><span class="stack" aria-hidden="true"><span class="s1"></span><span class="s2"></span></span><span class="cat-main"><span class="cat-line"><span class="cat-name">M. Osei</span><span class="cat-count">11</span></span><span class="volbar"><span class="vol" style="width: 30%"></span></span></span></div>
+          <div class="catrow"><span class="stack" aria-hidden="true"><span class="s1"></span><span class="s2"></span></span><span class="cat-main"><span class="cat-line"><span class="cat-name">State Farm</span><span class="cat-count">8</span></span><span class="volbar"><span class="vol" style="width: 22%"></span></span></span></div>
+          <div class="catrow"><span class="stack" aria-hidden="true"><span class="s1"></span><span class="s2"></span></span><span class="cat-main"><span class="cat-line"><span class="cat-name">Dr. Chen</span><span class="cat-count">5</span></span><span class="volbar"><span class="vol" style="width: 14%"></span></span></span></div>
+          <div class="side-foot">Entities are found, not made.<br>37 across 203 records</div>
+        </div>
+        <div class="stage">
+          <div class="dossier-hero">
+            <span class="dossier-mark"><svg width="20" height="20" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 6.5L7 2L12 6.5V12H2V6.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></span>
+            <div class="dossier-t">
+              <h2>1247 Fillmore St, Apt 4</h2>
+              <p>Apartment · 23 records · 6 documents · since March 2024</p>
+            </div>
+          </div>
+          <div class="facts">
+            <div class="fact"><span class="fact-k">Rent</span><span class="fact-v">$3,200<span style="font-size:10px;color:var(--gray-2);font-weight:400">/mo</span></span><span class="fact-src">lease §3</span></div>
+            <div class="fact"><span class="fact-k">Term ends</span><span class="fact-v">Mar 31, 2027</span><span class="fact-src">renewal_2026</span></div>
+            <div class="fact"><span class="fact-k">Break penalty</span><span class="fact-v sm">1 month + 60d notice</span><span class="fact-src">email ⋈ lease §14</span></div>
+            <div class="fact"><span class="fact-k">Deposit held</span><span class="fact-v">$4,800</span><span class="fact-src">lease §5</span></div>
+            <div class="fact"><span class="fact-k">Landlord</span><span class="fact-v sm">M. Osei</span><span class="fact-src">11 records</span></div>
+            <div class="fact"><span class="fact-k">Paid to date</span><span class="fact-v">$92,800</span><span class="fact-src">29 transfers</span></div>
+          </div>
+          <div class="tl">
+            <div class="tl-item"><span class="tl-dot d-pdf"></span><span class="tl-date">mar 2024</span><span class="tl-name">lease_final.pdf</span></div>
+            <div class="tl-item"><span class="tl-dot d-img"></span><span class="tl-date">mar 2024</span><span class="tl-name">move_in_photos</span></div>
+            <div class="tl-item"><span class="tl-dot d-eml"></span><span class="tl-date">mar 2026</span><span class="tl-name">Re: amendment</span></div>
+            <div class="tl-item"><span class="tl-dot d-pdf"></span><span class="tl-date">feb 2026</span><span class="tl-name">renewal_2026</span></div>
+            <div class="tl-item"><span class="tl-dot d-eml"></span><span class="tl-date">jun 2026</span><span class="tl-name">repair request</span></div>
+          </div>
+          <div class="linked">
+            <span class="ent"><span class="av">MO</span>M. Osei <span class="n">landlord</span></span>
+            <span class="ent"><span class="av">SF</span>State Farm <span class="n">renters</span></span>
+            <span class="ent"><span class="av">PG</span>PG&amp;E <span class="n">utility · 27</span></span>
+            <span class="ent"><span class="av">JW</span>J. Waters <span class="n">roommate</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">03</span><p class="sec-name">Any category is a spreadsheet</p><span class="sec-note">— where "actionable" gets literal</span></div>
+    <div class="window">
+      <div class="toolbar">
+        <div class="lights"><span class="light l-r"></span><span class="light l-y"></span><span class="light l-g"></span></div>
+        <span class="tb-title">Finances <span>· 128 records</span></span>
+        <span class="tb-spacer"></span>
+        <span class="tb-chip">Ask <span class="kbd">⌘K</span></span>
+      </div>
+      <div class="stage" style="padding: 12px 14px 0; gap: 9px;">
+        <div class="tbl-bar">
+          <span class="fpill on">This year</span>
+          <span class="fpill">Subscriptions</span>
+          <span class="fpill">Over $100</span>
+          <span class="fpill">Unmatched</span>
+          <span class="tbl-spacer"></span>
+          <span class="exp">Export CSV</span>
+        </div>
+        <div class="block" style="margin-bottom: 0;">
+          <table>
+            <thead><tr><th>Date</th><th>Vendor</th><th style="text-align:right">Amount</th><th>Kind</th><th>Source</th></tr></thead>
+            <tbody>
+              <tr><td class="cell-mono">2026-07-31</td><td>Figma</td><td class="num">$252.00</td><td class="cell-mono">subscription</td><td class="cell-src">receipt_jul.pdf</td></tr>
+              <tr><td class="cell-mono">2026-07-28</td><td>M. Osei</td><td class="num">$3,200.00</td><td class="cell-mono">rent</td><td class="cell-src">chase_stmt_jul</td></tr>
+              <tr><td class="cell-mono">2026-07-19</td><td>State Farm</td><td class="num">$186.40</td><td class="cell-mono">insurance</td><td class="cell-src">policy_2026.pdf</td></tr>
+              <tr><td class="cell-mono">2026-07-14</td><td>PG&amp;E</td><td class="num">$97.12</td><td class="cell-mono">utility</td><td class="cell-src">pge_jul.pdf</td></tr>
+              <tr><td class="cell-mono">2026-07-02</td><td>Dr. Chen</td><td class="num">$45.00</td><td class="cell-mono">copay</td><td class="cell-src">IMG_2118.heic</td></tr>
+            </tbody>
+          </table>
+          <div class="tbl-foot"><span>5 of 128 shown</span><span>Sum $3,780.52</span></div>
+        </div>
+      </div>
+      <div style="height: 12px; background: linear-gradient(180deg, #FCFCFA, rgba(233, 246, 253, 0.5));"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">04</span><p class="sec-name">Chat becomes ⌘K</p><span class="sec-note">— for when you do know the question</span></div>
+    <div class="palette-wrap">
+      <div class="palette">
+        <div class="pal-input"><svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><circle cx="5.5" cy="5.5" r="4" stroke="#979AA1" stroke-width="1.4"/><line x1="8.6" y1="8.6" x2="12" y2="12" stroke="#979AA1" stroke-width="1.4" stroke-linecap="round"/></svg><span class="q">deductible</span><span class="caret"></span></div>
+        <p class="pal-sec" style="margin:0">Answer</p>
+        <p class="pal-ans" style="margin:0"><b>$1,500</b> individual, $3,000 family — up from $1,200 last year. <span style="color:var(--blue-deep);font-family:var(--mono);font-size:10px">insurance_2026.pdf p.2</span></p>
+        <p class="pal-sec" style="margin:0">Records</p>
+        <div class="pal-row sel"><span class="mini"></span>2026 policy · State Farm<span class="pal-meta">Health</span></div>
+        <div class="pal-row"><span class="mini"></span>2025 policy · State Farm<span class="pal-meta">Health</span></div>
+        <p class="pal-sec" style="margin:0">Documents</p>
+        <div class="pal-row"><span class="mini"></span>insurance_2026.pdf<span class="pal-meta">2 min ago</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><span class="sec-num">05</span><p class="sec-name">Why this shape</p></div>
+    <div class="verdict">
+      <div class="vcard">
+        <span class="tag">the case for briefing-first</span>
+        <h3>It works when you're not there</h3>
+        <p>A chat app is dead until you type. A briefing accrues value in the background — drop files Sunday, learn Monday that a deadline exists. It's the only surface that justifies a background engine.</p>
+      </div>
+      <div class="vcard">
+        <span class="tag">the case for dossiers</span>
+        <h3>The join becomes visible</h3>
+        <p>Facts pulled from six files sit on one page, each traceable to its source. This is the thing chat can only describe and Obsidian can only hold — and no chat app gives you it.</p>
+      </div>
+      <div class="vcard">
+        <span class="tag">the honest risk</span>
+        <h3>It's more to build</h3>
+        <p>A briefing needs date extraction, entity resolution, and change detection before it shows anything. Chat needs retrieval and a text box. This shape is v0.2 work packed into v0.1.</p>
+      </div>
+    </div>
+  </section>
+
+  <p class="tokens"><b>Same design language</b> — sky wash, cyan→blue accent, no pink, gradient surfaces, pills, SF Pro + SF Mono metadata, dense rows. <b>New patterns</b> — briefing blocks with source lines, fact cards with provenance, entity dossier + timeline strip, sortable category table with CSV out, ⌘K palette that answers inline instead of opening a thread.</p>
+
+</div>
