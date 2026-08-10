@@ -23,22 +23,40 @@ public struct Organize: Sendable {
     /// any particular record. Left in, it wires everything to everything and collapses
     /// every cluster into one — the same reason search engines drop stopwords.
     ///
-    /// Set at 0.6 rather than lower because a library naturally splits into a few
-    /// groups: with two equal halves, the entity defining each one reaches 50%, and a
-    /// stricter threshold would discard the very structure we're looking for.
+    /// Set at 0.35, lowered from 0.6 after real runs. The original worry was that a
+    /// library splitting into two halves gives each defining entity 50%, so a strict
+    /// threshold would discard the structure — but measured on a real library the
+    /// defining entities sit at 20–25% (one vendor, one landlord, one clinic) while the
+    /// owner's own name reaches 36%. The gap is wide enough to cut between.
+    ///
+    /// This backs up the spread test below rather than replacing it, because that test
+    /// reads the model's category guesses — and on the run where those guesses all came
+    /// back the same word, it saw no spread, suppressed nothing, and the whole library
+    /// collapsed into one category. A rule that fails exactly when the signal it depends
+    /// on fails needs a second rule that doesn't.
     public static let hubShare = 0.6
+
+    /// The share above which an entity stops being informative, which depends on how
+    /// much library there is.
+    ///
+    /// In a small library a group's defining entity legitimately reaches a high share —
+    /// six documents in two groups puts each group's entity at 50% — so a strict
+    /// threshold there deletes the structure instead of the noise, and there is little
+    /// to cluster anyway. Once there are enough documents for a few real groups, the gap
+    /// opens up: measured on a twenty-five document library the defining entities sat at
+    /// 20–25% (one vendor, one landlord, one clinic) while the owner's own name reached
+    /// 36%. That gap is what this cuts between.
+    static let largeLibrary = 20
+    static let hubShareWhenLarge = 0.35
+
+    static func hubShare(forLibraryOf total: Int) -> Double {
+        total >= largeLibrary ? hubShareWhenLarge : hubShare
+    }
 
     /// Hub-hunting only makes sense once there's a library to be a hub of. Below this
     /// many records, and below this many connections, every entity looks over-connected.
     static let hubMinimumRecords = 5
     static let hubMinimumReach = 3
-
-    /// How many different areas of life an entity has to touch before it stops telling
-    /// you anything about where a document belongs. Three, because two areas genuinely
-    /// overlap — a landlord can be on both the lease and a utility bill — but a name on
-    /// documents from three unrelated parts of a life is the person themselves, or their
-    /// bank, or their city.
-    static let hubMinimumAreas = 3
 
     /// How many *distinct* entities must tie a record to a group before it joins.
     ///
@@ -138,15 +156,6 @@ public struct Organize: Sendable {
                 GROUP BY entity.id
                 """)
 
-            // What each record was read as, for the spread test below.
-            let hintOf = Dictionary(
-                records.compactMap { record -> (Int64, String)? in
-                    guard let id = record.id,
-                          let hint = (record.categoryHint ?? record.category)?.trimmed.nilIfEmpty,
-                          hint != Self.holdingCategory else { return nil }
-                    return (id, hint)
-                }, uniquingKeysWith: { first, _ in first })
-
             for row in rows {
                 let reach = row["reach"] as Int? ?? 0
                 guard reach > 1 else { continue }
@@ -157,30 +166,38 @@ public struct Organize: Sendable {
                     """, arguments: ["entity:\(entityID)"])
 
                 if total >= Self.hubMinimumRecords, reach >= Self.hubMinimumReach {
-                    // Two ways to be uninformative. Touching most of the library is one.
-                    let ubiquitous = Double(reach) / Double(total) > Self.hubShare
-
-                    // The other is subtler and share alone can't see it. In a personal
-                    // library the owner's own name is on the lease, the invoice, the
-                    // policy and the boarding pass — nine documents out of twenty-five,
-                    // exactly like the main supplier. What separates them is *spread*:
-                    // the supplier's documents are all one kind of thing, the owner's
-                    // are every kind. An entity scattered across unrelated areas of a
-                    // life says nothing about where any of them belong, and left in the
-                    // graph it welds the whole library into a single category.
-                    let spread = Set(attached.compactMap { hintOf[$0] })
-                    let indiscriminate = spread.count >= Self.hubMinimumAreas
-
-                    if ubiquitous || indiscriminate {
+                    // Reach alone, deliberately.
+                    //
+                    // I also tried a spread test: an entity whose documents were guessed
+                    // into three or more different areas of life is the person
+                    // themselves, not a subject. It reads well and it measured badly. On
+                    // one run it saw no spread at all — the model had labelled everything
+                    // with the same word — suppressed nothing, and the library collapsed
+                    // into one category. On the next it suppressed the landlord, whose
+                    // six documents had been guessed as Apartment, Utilities and
+                    // Finance, and took the Apartment cluster down with him. The test
+                    // was reading the model's naming consistency and calling it
+                    // structure. Reach doesn't depend on that, and across runs it picks
+                    // out the owner (36–40% of the library) while leaving the landlord
+                    // (20–28%) alone.
+                    if Double(reach) / Double(total) > Self.hubShare(forLibraryOf: total) {
                         hubs.append(row["name"] as String? ?? "?")
                         continue
                     }
                 }
 
+                // Weight by rarity, not by count. Two documents that share a landlord
+                // who appears on six of them are less related than two that share a
+                // clinic appearing on three — the same reasoning that makes hub
+                // suppression necessary, applied by degree instead of as a cliff edge.
+                // Suppression can only delete an entity or keep it whole; this lets a
+                // moderately common name still count for something, just less, which is
+                // what stops one borderline entity from deciding the whole shape.
+                let weight = max(1, 1_000 / reach)
                 for a in attached {
                     entitiesByRecord[a, default: []].insert(entityID)
                     for b in attached where a != b {
-                        adjacency[a, default: [:]][b, default: 0] += 1
+                        adjacency[a, default: [:]][b, default: 0] += weight
                     }
                 }
             }

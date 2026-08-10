@@ -155,7 +155,9 @@ public actor Librarian {
             // All of these look at the whole library, so running them per file would
             // be waste. Settling comes after sorting because a document can only be
             // compared with its peers once it has some.
-            _ = try await Consolidate(store: store).run()
+            let tidier = Consolidate(store: store)
+            _ = try await tidier.sweepOrphanedLinks()
+            _ = try await tidier.run()
             _ = try await Organize(store: store).run()
             if settle {
                 // Re-reads only the documents that describe things unlike their peers,
@@ -223,7 +225,9 @@ public actor Librarian {
                 onProgress?(progress)
             }
         }
-        _ = try await Consolidate(store: store).run()
+        let tidier = Consolidate(store: store)
+        _ = try await tidier.sweepOrphanedLinks()
+        _ = try await tidier.run()
         _ = try await Organize(store: store).run()
         _ = try await Namer(store: store).nameAll()
 

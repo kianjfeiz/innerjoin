@@ -43,6 +43,7 @@ struct Checks {
         await distillChecks()
         await consolidateChecks()
         await entityIdentityChecks()
+        await staleLinkChecks()
         await organizeChecks()
         await categoryEvidenceChecks()
         await robustnessChecks()

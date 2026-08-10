@@ -147,6 +147,21 @@ public struct Distill: Sendable {
         let draft = record
         record = try await store.dbQueue.write { db -> Record in
             // Re-running replaces cleanly rather than accumulating.
+            //
+            // A link names its record as the string "record:42", not as a foreign key,
+            // because one table has to hold record→entity and record→record edges alike.
+            // The cost is that nothing cascades: deleting the record here and inserting
+            // a replacement with a fresh id would leave every old edge in place, still
+            // pointing at a row that no longer exists. Nothing would look wrong — until
+            // clustering counts how many records an entity touches, sees the ghosts, and
+            // decides the main supplier is attached to half the library and must be a
+            // hub. That is what made five real runs disagree with each other: every
+            // re-read inflated the graph a little more.
+            let replaced = try Int64.fetchAll(
+                db, sql: "SELECT id FROM record WHERE documentID = ?", arguments: [documentID])
+            for old in replaced {
+                try db.execute(sql: "DELETE FROM link WHERE src = ?", arguments: ["record:\(old)"])
+            }
             try Record.filter(Record.Columns.documentID == documentID).deleteAll(db)
             var saved = draft
             try saved.insert(db)

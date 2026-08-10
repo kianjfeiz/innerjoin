@@ -32,7 +32,24 @@ public struct Consolidate: Sendable {
         public let newer: (title: String, value: String)
     }
 
+    /// Removes edges pointing at records that no longer exist.
+    ///
+    /// Links identify their endpoints by string, so a replaced record leaves its edges
+    /// behind. They're invisible in the UI and poisonous to clustering, which counts
+    /// them as real connections.
     @discardableResult
+    public func sweepOrphanedLinks() async throws -> Int {
+        try await store.dbQueue.write { db in
+            let before = try Link.fetchCount(db)
+            try db.execute(sql: """
+                DELETE FROM link
+                WHERE src LIKE 'record:%'
+                  AND CAST(SUBSTR(src, 8) AS INTEGER) NOT IN (SELECT id FROM record)
+                """)
+            return before - (try Link.fetchCount(db))
+        }
+    }
+
     public func run() async throws -> Outcome {
         let merged = try await mergeDuplicateEntities()
         let conflicts = try await flagConflicts()

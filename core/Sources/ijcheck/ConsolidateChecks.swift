@@ -194,3 +194,38 @@ private func sameNameOneEntity() async throws {
                           "so both documents are tied to it")
     }
 }
+
+/// The bug that made five real runs disagree with each other.
+func staleLinkChecks() async {
+    print("\nGraph hygiene · a replaced record leaves nothing behind")
+    await check("re-reading a document doesn't leave ghost edges", noGhostEdges)
+}
+
+private func noGhostEdges() async throws {
+    try await withWorkspace { store in
+        let added = try await Ingest(store: store).add(fileAt: try fixture("lease.pdf"))
+        let documentID = try require(added.document.id, "id")
+        let provider = ScriptedProvider(json: """
+        {"title":"Lease","summary":"s","fields":[],"dates":[],
+         "entities":[{"name":"M. Osei","kind":"person","relation":"party_to"}]}
+        """)
+        let distill = Distill(store: store, provider: provider)
+
+        _ = try await distill.understand(documentID: documentID)
+        let first = try store.graphHealth().links
+        await expectEqual(first, 1, "one document, one edge")
+
+        // Understanding again replaces the record — with a new row id, because links
+        // name their records by string and nothing cascades. Read three times, an entity
+        // in one document would look attached to three, and clustering would call the
+        // main supplier a hub and throw it away.
+        _ = try await distill.understand(documentID: documentID)
+        _ = try await distill.understand(documentID: documentID)
+        await expectEqual(try store.graphHealth().links, 1,
+                          "three readings still leave exactly one edge")
+
+        let entityID = try require(try store.entities().first?.id, "the entity")
+        await expectEqual(try store.records(linkedTo: entityID).count, 1,
+                          "and the entity is attached to one record, not three")
+    }
+}

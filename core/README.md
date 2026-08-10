@@ -78,11 +78,12 @@ that disagree, so it's a small fraction of extra calls. `ijparse settle` runs it
 ## Measuring it
 
 ```bash
-swift run ijcheck    # 275 checks, deterministic, no key
+swift run ijcheck    # 328 checks, deterministic, no key
 swift run ijeval     # score the pipeline against a known-truth corpus
 ```
 
-`ijeval` builds twenty-two documents across four areas of a life, in six formats,
+`ijeval --real` runs the same corpus through whatever model you've connected, and
+reports accuracy *and* cost. `ijeval` alone builds twenty-two documents across four areas of a life, in six formats,
 plus three deliberately broken files — then runs them through a *simulated* model at
 0%, 40% and 90% error. The point isn't the score with a perfect model; it's how
 gently the numbers fall as the model gets worse, because that decay is the part we
@@ -108,6 +109,45 @@ Four real defects came out of building this — role nouns formed by suffix
 forms under four characters never merging, leaving 20% of entities as singletons; and
 clustering counting one shared name once per group member, so raising the bar for
 joining a category did nothing at all.
+
+### Against a real model
+
+Measured on `deepseek/deepseek-v4-flash-0731` via OpenRouter, twenty-five documents plus
+eleven scored questions, about **$0.005 a run** (~1,600 tokens per document):
+
+| | result |
+|---|---|
+| files read | 100% |
+| facts preserved | 100% |
+| entities found | 90–100% |
+| scenery kept out | yes |
+| citations valid | 100% |
+| schema coherence | 94–100% |
+| named from contents | 100% |
+| **answers correct** | **88–100%** |
+| **refused what it can't answer** | **100%** |
+| **answer citations resolve** | **100%** |
+| category purity | 60–93% |
+| category coverage | 44–80% |
+
+Reading, citing, naming and answering are stable. **Clustering is not**, and the range
+above is the honest one: a real model names a slightly different set of entities on each
+run, and a document's category can hinge on one of them. The simulator can't show this
+because it names the same entities every time — which is exactly why the thresholds were
+recalibrated downward once real numbers existed, rather than left at a figure only a
+simulator could hit.
+
+Six defects came out of the first real runs, none of which a simulator could have
+produced:
+
+| found | why it mattered |
+|---|---|
+| Model cites `[e12]`, we stored `e12` | Every bracketed citation was discarded as invented — the model was right and punctuation threw the provenance away |
+| Reasoning tokens starved the reply | 7 of 25 documents came back empty; disabling reasoning cut output tokens 306 → 18 for the same answer |
+| Replaced records left ghost edges | Links name records by string, so nothing cascades; every re-read inflated entity reach until real entities looked like hubs and were thrown away |
+| One organization stored two or three times | The model called it `org`, then `place`, then `person`, and each label minted a node — severing the documents that should have clustered |
+| Clustering read back its own last answer | `category` held both the model's guess and the assigned result, so each pass counted its own output as evidence |
+| A cluster named by one document's opinion | Thirteen documents filed as "spending_report" because a single spreadsheet said so |
 
 Workspaces live at `~/Library/Application Support/innerjoin/Personal` by default;
 `-w <path>` picks another. A workspace is one folder: `innerjoin.sqlite` plus a
