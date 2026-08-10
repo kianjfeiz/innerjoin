@@ -73,6 +73,10 @@ public struct Organize: Sendable {
     /// like three.
     static let minimumAttachment = 1
 
+    /// Beyond this many entities, a document is a summary of a life rather than an event
+    /// in one, and the names in it are a list rather than a relationship.
+    static let maximumBridgingBreadth = 5
+
     public static let holdingCategory = "Everything else"
 
     public init(store: Store) { self.store = store }
@@ -148,6 +152,20 @@ public struct Organize: Sendable {
         var hubs: [String] = []
 
         try store.dbQueue.read { db in
+            // How many entities each record names. A lease names two or three; a bank
+            // statement or an annual-spend spreadsheet names everyone you dealt with all
+            // year, drawn from every corner of your life.
+            var breadthOf: [Int64: Int] = [:]
+            for row in try Row.fetchAll(db, sql: """
+                SELECT src AS src, COUNT(DISTINCT dst) AS n FROM link
+                WHERE src LIKE 'record:%' GROUP BY src
+                """) {
+                let source = row["src"] as String? ?? ""
+                if let id = Int64(source.dropFirst("record:".count)) {
+                    breadthOf[id] = row["n"] as Int? ?? 0
+                }
+            }
+
             let rows = try Row.fetchAll(db, sql: """
                 SELECT entity.id AS entityID, entity.name AS name,
                        COUNT(DISTINCT link.src) AS reach
@@ -196,7 +214,19 @@ public struct Organize: Sendable {
                 let weight = max(1, 1_000 / reach)
                 for a in attached {
                     entitiesByRecord[a, default: []].insert(entityID)
+                    // A summary document doesn't get to marry the things it summarizes.
+                    //
+                    // Hub suppression handles an *entity* that touches everything. This
+                    // is the same failure one level up: a bank statement names the
+                    // landlord, the clinic and the airline, and through it every cluster
+                    // fuses into one — which is exactly what the last runs produced, a
+                    // single category of fifteen documents spanning four areas while
+                    // each defining entity stayed properly area-pure. Such a record
+                    // still gets filed, by whatever it shares most with; it just stops
+                    // being evidence that two *other* documents are related.
+                    guard breadthOf[a, default: 0] <= Self.maximumBridgingBreadth else { continue }
                     for b in attached where a != b {
+                        guard breadthOf[b, default: 0] <= Self.maximumBridgingBreadth else { continue }
                         adjacency[a, default: [:]][b, default: 0] += weight
                     }
                 }

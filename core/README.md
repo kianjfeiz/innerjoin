@@ -124,18 +124,26 @@ eleven scored questions, about **$0.005 a run** (~1,600 tokens per document):
 | citations valid | 100% |
 | schema coherence | 94–100% |
 | named from contents | 100% |
-| **answers correct** | **88–100%** |
-| **refused what it can't answer** | **100%** |
+| **answers correct** | **100%** (8/8, last four runs) |
+| **refused what it can't answer** | **100%** (3/3) |
 | **answer citations resolve** | **100%** |
-| category purity | 60–93% |
-| category coverage | 44–80% |
+| category purity | 44–100%, typically ~72% |
+| category coverage | 52–72% |
 
-Reading, citing, naming and answering are stable. **Clustering is not**, and the range
-above is the honest one: a real model names a slightly different set of entities on each
-run, and a document's category can hinge on one of them. The simulator can't show this
-because it names the same entities every time — which is exactly why the thresholds were
-recalibrated downward once real numbers existed, rather than left at a figure only a
-simulator could hit.
+Everything except the last two lines is stable run to run. **Clustering is not, and it
+isn't finished.** Measured across twenty-two real runs, purity ranges from 44% to 100%
+and misses its own floor roughly one run in five. The cause is understood: a document's
+cluster can hinge on a single entity, and a real model names a slightly different set on
+each reading. Four fixes moved the median a long way (ghost edges, one-name-one-node,
+rarity weighting, the bridging cap) but none of them made it *stable*, because the input
+isn't.
+
+The simulator reported 93–94% purity throughout, because it names the same entities on
+the same documents every time. That figure was never real, and the thresholds here were
+recalibrated down to what actually held rather than left at a number only a simulator
+could reach. What would fix it properly is a second, independent signal for relatedness —
+text similarity between documents, not just shared names — so that one entity can't decide
+a document's home. That's the next piece of work, not a tuning knob.
 
 Six defects came out of the first real runs, none of which a simulator could have
 produced:

@@ -14,6 +14,10 @@ public enum ProviderError: LocalizedError {
     case noKey(String)
     case http(Int, String)
     case malformed(String)
+    /// The model answered, in words rather than JSON. Carries the words, because for a
+    /// question that prose is usually a perfectly good answer — it just needs salvaging
+    /// rather than discarding. Extraction can't use it; answering can.
+    case notJSON(String)
     case noContent
 
     public var errorDescription: String? {
@@ -22,6 +26,7 @@ public enum ProviderError: LocalizedError {
         case .http(let code, let body):
             return "The model service returned \(code): \(body.prefix(200))"
         case .malformed(let why): return "The model's reply couldn't be read: \(why)"
+        case .notJSON(let text):  return "The model answered in prose: \(text.prefix(120))"
         case .noContent:          return "The model returned nothing."
         }
     }

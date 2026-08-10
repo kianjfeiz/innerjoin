@@ -150,7 +150,7 @@ struct OpenAICompatibleProvider: ModelProvider {
                 : "the reply had no content (finish_reason: \(reason))")
         }
         guard let object = HTTP.firstJSONObject(in: text) else {
-            throw ProviderError.malformed("the reply wasn't JSON: \(text.prefix(120))")
+            throw ProviderError.notJSON(text)
         }
         return object
     }

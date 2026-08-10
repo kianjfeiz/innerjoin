@@ -245,7 +245,7 @@ public actor Librarian {
             catch let error as ProviderError {
                 lastError = error
                 switch error {
-                case .malformed, .noContent:
+                case .malformed, .notJSON, .noContent:
                     // The model answered, just badly. Retrying rarely helps.
                     throw error
                 case .noKey:

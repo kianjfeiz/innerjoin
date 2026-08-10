@@ -25,8 +25,10 @@ public struct Ask: Sendable {
     /// fields answer "how much is the rent", the text answers everything else.
     let deepReadCount = 3
     let maxCharactersPerExcerpt = 3_000
-    // Headroom, so a model that thinks before it writes still has room to write.
-    let maxOutputTokens = 2_500
+    // Headroom, so a model that thinks before it writes still has room to write. Raised
+    // after a real run cut a reply off mid-object: the salvage path can rescue prose, but
+    // half a JSON object is neither prose nor JSON, and the question was simply lost.
+    let maxOutputTokens = 4_000
 
     public init(store: Store, provider: any ModelProvider, breadth: Int = 8) {
         self.store = store
@@ -76,12 +78,21 @@ public struct Ask: Sendable {
         }
 
         let context = try material(for: hits)
-        let data = try await provider.extract(
-            system: Ask.system,
-            user: "Question: \(question)\n\n---\n\(context)",
-            schema: Ask.schema,
-            maxTokens: maxOutputTokens
-        )
+        var data: Data
+        do {
+            data = try await provider.extract(
+                system: Ask.system,
+                user: "Question: \(question)\n\n---\n\(context)",
+                schema: Ask.schema,
+                maxTokens: maxOutputTokens
+            )
+        } catch ProviderError.notJSON(let prose) {
+            // A real run lost the right answer here — "Your health insurance deductible
+            // is $1,500.00…" — because it arrived as a sentence instead of an object and
+            // the error was raised before anything could look at it. The words are the
+            // answer; the tokens in them are still checked below like any other.
+            data = Data(prose.utf8)
+        }
         // Models occasionally answer in prose despite the schema. The words are still
         // a good answer and they still carry their `d3:e12` tokens, so salvaging beats
         // failing the question — and every token is verified below either way.
