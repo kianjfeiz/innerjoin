@@ -9,6 +9,28 @@ func formatChecks() async {
     await check("email drops the quoted thread and names attachments", emailThreading)
     await check("multi-column pages read down one column then the next", columnOrder)
     await check("zip reading survives a truncated archive", corruptArchive)
+    await check("a sideways scan is read upright and in order", rotatedScan)
+}
+
+private func rotatedScan() async throws {
+    try await withWorkspace { store in
+        // A page fed into the scanner sideways: the stored pixels run vertically and
+        // /Rotate is what makes it upright. Rendered at the stored shape, recognition
+        // returns tall boxes in reverse order — every fact lands on the wrong line.
+        let result = try await Ingest(store: store).add(fileAt: try fixture("rotated_scan.pdf"))
+        let elements = try store.elements(of: try require(result.document.id, "document id"))
+        await expect(!elements.isEmpty, "a rotated page yields text at all")
+
+        // Upright text gives wide, short boxes. Tall ones mean it rendered sideways.
+        let boxed = elements.compactMap(\.box)
+        await expect(boxed.allSatisfy { $0.width > $0.height },
+                     "every line is wider than it is tall, so the page rendered upright")
+
+        let markdown = try require(result.document.markdown, "markdown")
+        let title = try require(markdown.range(of: "SIDEWAYS CLINIC"), "the heading")
+        let footer = try require(markdown.range(of: "Please remit"), "the closing line")
+        await expect(title.lowerBound < footer.lowerBound, "and top-to-bottom order is preserved")
+    }
 }
 
 private func spreadsheets() async throws {

@@ -341,8 +341,18 @@ public struct PDFPartitioner: Partitioner {
     private func render(_ page: PDFPage) -> CGImage? {
         let bounds = page.bounds(for: .mediaBox)
         guard bounds.width > 1, bounds.height > 1 else { return nil }
+
+        // A page can carry a rotation — a scan fed in sideways is the usual cause.
+        // `draw` honours it, so the canvas has to be sized to the page as *displayed*,
+        // not as stored. Sized wrongly, the content lands outside the bitmap and the
+        // page comes back blank.
+        let quarterTurn = Self.isQuarterTurned(page)
+        let displayed = quarterTurn
+            ? CGSize(width: bounds.height, height: bounds.width)
+            : CGSize(width: bounds.width, height: bounds.height)
+
         let scale = ocrDPI / 72.0
-        let width = Int(bounds.width * scale), height = Int(bounds.height * scale)
+        let width = Int(displayed.width * scale), height = Int(displayed.height * scale)
         guard width > 0, height > 0, width * height < 80_000_000 else { return nil }
 
         guard let context = CGContext(
@@ -355,9 +365,23 @@ public struct PDFPartitioner: Partitioner {
         context.setFillColor(gray: 1, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         context.scaleBy(x: scale, y: scale)
+
+        // `draw` applies the page's /Rotate itself — verified against PDFKit's own
+        // thumbnail, which produces an identical image. So the only thing needed here
+        // is a canvas shaped like the page *as displayed*; rotating again would put
+        // the content outside the bitmap and yield a blank page.
         context.translateBy(x: -bounds.minX, y: -bounds.minY)
         page.draw(with: .mediaBox, to: context)
         return context.makeImage()
+    }
+
+    static func rotation(of page: PDFPage) -> Int {
+        ((page.rotation % 360) + 360) % 360
+    }
+
+    static func isQuarterTurned(_ page: PDFPage) -> Bool {
+        let turn = rotation(of: page)
+        return turn == 90 || turn == 270
     }
 
     /// Shared with the rich-text reader so both agree on what a heading looks like.
