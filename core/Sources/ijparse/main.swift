@@ -8,7 +8,8 @@ struct IJParse: AsyncParsableCommand {
         commandName: "ijparse",
         abstract: "innerjoin's on-device preprocessor — read files into markdown and elements.",
         subcommands: [Add.self, Show.self, List.self, Find.self,
-                      Understand.self, Record.self, Upcoming.self, Who.self, Key.self],
+                      Understand.self, Record.self, Upcoming.self, Who.self,
+                      Graph.self, Key.self],
         defaultSubcommand: Add.self
     )
 }
@@ -174,6 +175,7 @@ struct Understand: AsyncParsableCommand {
     @Option(help: "anthropic | openai | mock. Defaults to $IJ_PROVIDER.") var provider: String?
     @Option(help: "Model identifier. Defaults to $IJ_MODEL.") var model: String?
     @Option(name: .customLong("base-url"), help: "For local or third-party endpoints.") var baseURL: String?
+    @Flag(name: .shortAndLong, help: "Show which entities were refused, and why.") var verbose = false
 
     mutating func run() async throws {
         let store = try workspace.open()
@@ -203,7 +205,13 @@ struct Understand: AsyncParsableCommand {
                 if result.droppedCitations > 0 {
                     notes.append("\(result.droppedCitations) bad citations dropped")
                 }
+                if !result.refusedEntities.isEmpty {
+                    notes.append("\(result.refusedEntities.count) entities refused")
+                }
                 print("  understood  \(name.padded(34)) \(result.record.title.padded(40)) \(notes.joined(separator: " · "))")
+                if verbose {
+                    for refusal in result.refusedEntities { print("                refused: \(refusal)") }
+                }
             } catch {
                 failed += 1
                 let reason = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -332,6 +340,48 @@ struct Who: AsyncParsableCommand {
         for record in try store.records(linkedTo: match.id ?? 0) {
             let when = record.happenedOn.map(Record.day) ?? "—"
             print("  \(when.padded(12)) \(record.title)")
+        }
+    }
+}
+
+// MARK: - graph
+
+struct Graph: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Is the knowledge graph healthy, or bloating?")
+
+    @OptionGroup var workspace: WorkspaceOption
+
+    mutating func run() async throws {
+        let store = try workspace.open()
+        let health = try store.graphHealth()
+        guard health.records > 0 else { print("Nothing understood yet."); return }
+
+        print("\(health.records) records · \(health.entities) entities · \(health.links) links")
+        print(String(format: "%.1f entities per record", health.entitiesPerRecord))
+        print(String(format: "%d singletons (%.0f%% of entities)",
+                     health.singletons, health.singletonShare * 100))
+
+        // Judgement, not just numbers — the point is to notice drift early.
+        if health.entitiesPerRecord > 6 {
+            print("\n⚠︎ More than six entities per record. Extraction is probably naming scenery.")
+        }
+        if health.singletonShare > 0.8 && health.entities > 20 {
+            print("\n⚠︎ Most entities appear in only one file. Either the library is young,")
+            print("  or names aren't being matched to each other.")
+        }
+        if !health.hubs.isEmpty {
+            print("\nhubs — attached to much of the library, so they say little:")
+            for hub in health.hubs {
+                print(String(format: "  %@  %d records (%.0f%%)",
+                             hub.name.padded(34), hub.records, hub.share * 100))
+            }
+        }
+        if !health.relations.isEmpty {
+            print("\nrelations")
+            for relation in health.relations {
+                print("  \(relation.name.padded(18)) \(relation.count)")
+            }
         }
     }
 }

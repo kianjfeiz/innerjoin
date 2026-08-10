@@ -124,6 +124,43 @@ junk input, not flakiness. What guards those instead:
 - **Recognition confidence is recorded** per element, ready for a low-confidence
   escalation once there's real data to set the threshold against.
 
+## Keeping the graph clean
+
+Models over-produce entities. Asked for people, organizations, and places, they hand
+back the notary, the city, the state, the bank in the footer, and the word "Tenant" —
+and each becomes a node that dilutes the graph. It matters more than it sounds:
+categories will be derived from graph structure, so one hub entity attached to
+everything collapses clustering into a single blob.
+
+Five defences, none of which asks a model anything:
+
+1. **The name must appear in the document.** A name absent from the text was invented.
+   This catches fabrication outright.
+2. **Roles are refused** — tenant, landlord, buyer, notary. Every lease has a tenant;
+   naming one identifies nobody.
+3. **Broad places are refused** — a city or state is a hub waiting to happen. A name
+   containing a number survives, which is what makes a street address a real subject.
+4. **A per-document cap** of 15, dropping lowest-confidence first. A document naming
+   thirty parties is describing scenery.
+5. **On-device recognition corroborates.** `NLTagger` reads the document independently;
+   entities it also saw get confidence 1.0, model-only ones 0.75.
+
+Relations are a **closed enum** in the schema. Left open, models invent `party_to`,
+`is_party`, and `signatory_of` for one relationship and the graph stops being queryable.
+
+Refusals are reported, never silent — `understand --verbose` lists each one with its
+reason, because a rising refusal count is how you notice a prompt going wrong.
+
+```bash
+swift run ijparse graph        # is the graph healthy or bloating?
+```
+
+Two numbers matter. **Singletons** (entities touching exactly one record) are the
+signature of over-production: a real entity eventually recurs, an invented one never
+does. **Hubs** are the opposite failure — an entity attached to most of the library
+carries no information, the way a stopword carries none in a search index. The command
+warns above six entities per record, or when most entities are singletons.
+
 ## Known limits
 
 Measured, not guessed — each of these was found by running adversarial documents.

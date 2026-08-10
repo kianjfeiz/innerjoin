@@ -21,6 +21,13 @@ func distillChecks() async {
     await check("implausible dates are refused", implausibleDates)
     await check("a notice deadline is worked out, not asked for", derivedDeadline)
     await check("a provider failure leaves the document searchable", providerFailureIsSurvivable)
+
+    print("\nStage 3 · keeping the graph clean")
+    await check("invented entities are refused", inventedEntitiesRefused)
+    await check("roles and broad places are refused, real parties aren't", scenerRefused)
+    await check("a flood of entities is capped", entityFloodCapped)
+    await check("relations stay in the known vocabulary", relationVocabulary)
+    await check("graph health reports singletons and hubs", graphHealthReports)
 }
 
 // MARK: -
@@ -159,6 +166,132 @@ private func derivedDeadline() async throws {
         formatter.dateFormat = "yyyy-MM-dd"
         await expectEqual(formatter.string(from: deadline.date), "2027-01-30",
                           "60 days before the term ends")
+    }
+}
+
+// MARK: - Keeping the graph clean
+//
+// Over-production is the quiet failure: nothing errors, the graph just fills with
+// nodes that mean nothing, and Stage 6's clustering degrades into one blob.
+
+private func inventedEntitiesRefused() async throws {
+    try await withWorkspace { store in
+        let result = try await Ingest(store: store).add(fileAt: try fixture("lease.pdf"))
+        let documentID = try require(result.document.id, "document id")
+
+        // "Wayne Enterprises" is nowhere in this lease. A name absent from the text
+        // was invented, and no amount of confidence should get it onto the graph.
+        let provider = ScriptedProvider(json: """
+        {"title":"Lease","summary":"s","fields":[],"dates":[],
+         "entities":[{"name":"M. Osei","kind":"person","relation":"party_to"},
+                     {"name":"Wayne Enterprises","kind":"org","relation":"party_to"}]}
+        """)
+        let outcome = try await Distill(store: store, provider: provider).understand(documentID: documentID)
+
+        await expectEqual(outcome.entityCount, 1, "only the real party is admitted")
+        await expect(outcome.refusedEntities.contains { $0.contains("Wayne") },
+                     "and the invented one is reported, not silently dropped")
+        let names = try store.entities().map(\.name)
+        await expect(!names.contains("Wayne Enterprises"), "it never reaches the graph")
+    }
+}
+
+private func scenerRefused() async throws {
+    try await withWorkspace { store in
+        let result = try await Ingest(store: store).add(fileAt: try fixture("lease.pdf"))
+        let documentID = try require(result.document.id, "document id")
+
+        let provider = ScriptedProvider(json: """
+        {"title":"Lease","summary":"s","fields":[],"dates":[],
+         "entities":[{"name":"M. Osei","kind":"person","relation":"party_to"},
+                     {"name":"Tenant","kind":"person","relation":"party_to"},
+                     {"name":"San Francisco","kind":"place","relation":"located_at"},
+                     {"name":"CA","kind":"place","relation":"located_at"},
+                     {"name":"1247 Fillmore St","kind":"place","relation":"governs"}]}
+        """)
+        let outcome = try await Distill(store: store, provider: provider).understand(documentID: documentID)
+
+        let names = try store.entities().map(\.name)
+        await expect(names.contains("M. Osei"), "a named party is kept")
+        // A street address is a subject you can hold a lease on; a city is a hub.
+        await expect(names.contains("1247 Fillmore St"), "a specific address is kept")
+        await expect(!names.contains("Tenant"), "a role is refused")
+        await expect(!names.contains("San Francisco"), "a city is refused")
+        await expect(!names.contains("CA"), "a state is refused")
+        await expectEqual(outcome.entityCount, 2, "two survive of five proposed")
+    }
+}
+
+private func entityFloodCapped() async throws {
+    try await withWorkspace { store in
+        // Every name here appears in the document, so only the cap can stop them.
+        let markdown = (1...40).map { "Party Number \($0) signed the agreement." }.joined(separator: "\n\n")
+        let folder = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ij-flood-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("crowd.md")
+        try markdown.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let result = try await Ingest(store: store).add(fileAt: file)
+        let documentID = try require(result.document.id, "document id")
+
+        let entities = (1...40).map {
+            "{\"name\":\"Party Number \($0)\",\"kind\":\"org\",\"relation\":\"party_to\"}"
+        }.joined(separator: ",")
+        let provider = ScriptedProvider(json: """
+        {"title":"Crowd","summary":"s","fields":[],"dates":[],"entities":[\(entities)]}
+        """)
+        let outcome = try await Distill(store: store, provider: provider).understand(documentID: documentID)
+
+        await expect(outcome.entityCount <= EntityGate.perDocumentLimit,
+                     "the per-document limit holds at \(EntityGate.perDocumentLimit)")
+        await expect(!outcome.refusedEntities.isEmpty, "the overflow is reported")
+    }
+}
+
+private func relationVocabulary() async throws {
+    // The schema pins the enum, so a compliant provider can't invent predicates. This
+    // check guards the fallback path: anything unexpected becomes `mentions` rather
+    // than a new relation nobody will ever query.
+    try await withWorkspace { store in
+        let result = try await Ingest(store: store).add(fileAt: try fixture("lease.pdf"))
+        let documentID = try require(result.document.id, "document id")
+
+        let provider = ScriptedProvider(json: """
+        {"title":"Lease","summary":"s","fields":[],"dates":[],
+         "entities":[{"name":"M. Osei","kind":"person","relation":""}]}
+        """)
+        _ = try await Distill(store: store, provider: provider).understand(documentID: documentID)
+
+        let record = try require(try store.record(ofDocument: documentID), "a record")
+        let links = try store.links(from: try require(record.id, "record id"))
+        await expectEqual(links.first?.rel, "mentions", "an empty relation falls back to mentions")
+    }
+}
+
+private func graphHealthReports() async throws {
+    try await withWorkspace { store in
+        let ingest = Ingest(store: store)
+        let lease = try await ingest.add(fileAt: try fixture("lease.pdf"))
+        let notes = try await ingest.add(fileAt: try fixture("notes.md"))
+
+        // Osei is in both files; the notary is in one. One recurs, one doesn't —
+        // which is exactly what the singleton count is for.
+        let both = ScriptedProvider(json: """
+        {"title":"t","summary":"s","fields":[],"dates":[],
+         "entities":[{"name":"M. Osei","kind":"person","relation":"party_to"}]}
+        """)
+        let distill = Distill(store: store, provider: both)
+        _ = try await distill.understand(documentID: try require(lease.document.id, "id"))
+        _ = try await distill.understand(documentID: try require(notes.document.id, "id"))
+
+        let health = try store.graphHealth()
+        await expectEqual(health.records, 2, "both records counted")
+        await expectEqual(health.entities, 1, "one entity across both")
+        await expectEqual(health.singletons, 0, "an entity in two files isn't a singleton")
+        await expect(health.relations.contains { $0.name == "party_to" },
+                     "relations are broken down by kind")
     }
 }
 

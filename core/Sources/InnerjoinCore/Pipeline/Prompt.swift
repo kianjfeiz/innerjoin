@@ -29,7 +29,9 @@ enum Prompt {
         - `title` names the document as a person would refer to it, not the filename.
         - `summary` is one or two sentences, plain and specific.
         - Entities are the people, organizations, and places the document is *about* — \
-        not every name that appears in it.
+        not every name that appears in it. A named party, yes. The city it was signed \
+        in, the bank in the footer, the notary, a job title like "Tenant" — no. Most \
+        documents have between one and five. Returning more is usually a mistake.
         - If the document states a notice period in days, put the number in \
         `notice_days`. Do not calculate the deadline; that is done for you.
         """
@@ -89,9 +91,13 @@ enum Prompt {
                     "properties": [
                         "name": ["type": "string"],
                         "kind": ["type": "string", "enum": ["person", "org", "place", "product", "account"]],
+                        // A closed list on purpose. Left open, models invent
+                        // party_to / is_party / signatory_of / party for the same
+                        // relationship, and the graph becomes unqueryable.
                         "relation": [
                             "type": "string",
-                            "description": "party_to, issued_by, paid_to, governs, covers, located_at, mentions…",
+                            "enum": ["party_to", "issued_by", "paid_to", "governs", "covers",
+                                     "located_at", "employed_by", "owns", "mentions"],
                         ],
                         "source": ["type": "string"],
                     ],

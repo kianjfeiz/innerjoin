@@ -26,6 +26,9 @@ public struct Distill: Sendable {
         /// Citations the model invented, which were dropped. Non-zero means the prompt
         /// needs work — worth watching rather than hiding.
         public let droppedCitations: Int
+        /// Entities the gate turned away, with the reason. Surfaced rather than hidden:
+        /// this list is how you tell whether extraction is over-producing.
+        public let refusedEntities: [String]
     }
 
     /// Understands one already-rendered document.
@@ -88,7 +91,9 @@ public struct Distill: Sendable {
                               source: resolve(proposed.source)?.tag)
         }
 
-        let resolvedEntities = try await resolveEntities(reply.entities, documentID: documentID)
+        let gate = EntityGate(documentText: markdown)
+        let (resolvedEntities, refusedEntities) =
+            try await resolveEntities(reply.entities, gate: gate)
 
         let draft = record
         record = try await store.dbQueue.write { db -> Record in
@@ -102,9 +107,10 @@ public struct Distill: Sendable {
                 date.recordID = recordID
                 try date.insert(db)
             }
-            for (entityID, relation) in resolvedEntities {
-                var link = Link(src: Link.record(recordID), rel: relation,
-                                dst: Link.entity(entityID), documentID: documentID)
+            for admitted in resolvedEntities {
+                var link = Link(src: Link.record(recordID), rel: admitted.relation,
+                                dst: Link.entity(admitted.entityID),
+                                confidence: admitted.confidence, documentID: documentID)
                 try? link.insert(db)   // the unique index makes repeats a no-op
             }
             var updated = document
@@ -117,45 +123,79 @@ public struct Distill: Sendable {
         try await addDerivedDates(for: record, reply: reply)
 
         return Result(record: record, entityCount: resolvedEntities.count,
-                      dateCount: dates.count, droppedCitations: dropped)
+                      dateCount: dates.count, droppedCitations: dropped,
+                      refusedEntities: refusedEntities)
     }
 
-    /// Resolves proposed entities against what's already known.
-    ///
-    /// Exact match on the normalized name catches the large majority. Fuzzy matching
-    /// and model adjudication belong to Stage 4; doing the cheap rung now means the
-    /// graph is useful immediately without pretending to be clever.
-    private func resolveEntities(_ proposed: [Reply.ProposedEntity], documentID: Int64) async throws
-        -> [(entityID: Int64, relation: String)]
-    {
-        var out: [(Int64, String)] = []
-        for candidate in proposed {
-            let name = candidate.name.trimmed
-            guard name.count > 1 else { continue }
-            let kind = Entity.Kind(rawValue: candidate.kind ?? "other") ?? .other
-            let normalized = Entity.normalize(name)
-            guard !normalized.isEmpty else { continue }
+    struct AdmittedEntity: Sendable {
+        let entityID: Int64
+        let relation: String
+        let confidence: Double
+    }
 
+    /// Puts proposed entities through the gate, then resolves survivors against what's
+    /// already known.
+    ///
+    /// Two separate jobs, deliberately: the gate decides whether something is an entity
+    /// at all, and resolution decides whether it's one we've already met. Exact match on
+    /// the normalized name catches most duplicates; fuzzy matching belongs to Stage 4.
+    private func resolveEntities(_ proposed: [Reply.ProposedEntity], gate: EntityGate) async throws
+        -> (admitted: [AdmittedEntity], refused: [String])
+    {
+        var refused: [String] = []
+        var candidates: [(name: String, kind: Entity.Kind, relation: String,
+                          confidence: Double, mentions: Int)] = []
+
+        for entity in proposed {
+            let name = entity.name.trimmed
+            let kind = Entity.Kind(rawValue: entity.kind ?? "other") ?? .other
+            switch gate.judge(name: name, kind: kind) {
+            case .reject(let reason):
+                refused.append("\(name) (\(reason))")
+            case .admit(let confidence):
+                candidates.append((name, kind,
+                                   entity.relation?.trimmed.nilIfEmpty ?? "mentions",
+                                   confidence, gate.mentions(of: name)))
+            }
+        }
+
+        // A document naming thirty parties is describing scenery. Keep the ones the
+        // document actually dwells on, and say what was dropped.
+        if candidates.count > EntityGate.perDocumentLimit {
+            candidates.sort {
+                ($0.confidence, $0.mentions) > ($1.confidence, $1.mentions)
+            }
+            refused.append(contentsOf: candidates
+                .dropFirst(EntityGate.perDocumentLimit)
+                .map { "\($0.name) (over the per-document limit)" })
+            candidates = Array(candidates.prefix(EntityGate.perDocumentLimit))
+        }
+
+        var admitted: [AdmittedEntity] = []
+        for candidate in candidates {
+            let normalized = Entity.normalize(candidate.name)
             let entityID = try await store.dbQueue.write { db -> Int64? in
                 if var existing = try Entity
-                    .filter(Entity.Columns.normName == normalized && Entity.Columns.kind == kind.rawValue)
+                    .filter(Entity.Columns.normName == normalized
+                            && Entity.Columns.kind == candidate.kind.rawValue)
                     .fetchOne(db)
                 {
-                    if existing.name != name, !existing.aliases.contains(name) {
-                        existing.aliases.append(name)
+                    if existing.name != candidate.name, !existing.aliases.contains(candidate.name) {
+                        existing.aliases.append(candidate.name)
                         try existing.update(db)
                     }
                     return existing.id
                 }
-                var fresh = Entity(name: name, kind: kind)
+                var fresh = Entity(name: candidate.name, kind: candidate.kind)
                 try fresh.insert(db)
                 return fresh.id
             }
             if let entityID {
-                out.append((entityID, candidate.relation?.trimmed.nilIfEmpty ?? "mentions"))
+                admitted.append(AdmittedEntity(entityID: entityID, relation: candidate.relation,
+                                               confidence: candidate.confidence))
             }
         }
-        return out
+        return (admitted, refused)
     }
 
     /// A notice deadline is a term end minus a notice period. Computing it here keeps

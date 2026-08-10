@@ -252,6 +252,56 @@ public final class Store: Sendable {
         }
     }
 
+    /// Whether the graph is healthy or bloating.
+    ///
+    /// Two numbers matter. **Singletons** — entities touching exactly one record — are
+    /// the signature of over-production: a real entity eventually recurs, an invented
+    /// one never does. **Hubs** are the opposite failure: an entity attached to most of
+    /// the library carries no information and will wreck clustering, the way a stopword
+    /// wrecks a search index.
+    public struct GraphHealth: Sendable {
+        public let records: Int
+        public let entities: Int
+        public let links: Int
+        public let entitiesPerRecord: Double
+        public let singletons: Int
+        public let singletonShare: Double
+        public let hubs: [(name: String, records: Int, share: Double)]
+        public let relations: [(name: String, count: Int)]
+    }
+
+    public func graphHealth(hubThreshold: Double = 0.4) throws -> GraphHealth {
+        try dbQueue.read { db in
+            let records = try Record.fetchCount(db)
+            let entities = try Entity.fetchCount(db)
+            let links = try Link.fetchCount(db)
+
+            let counts = try Row.fetchAll(db, sql: """
+                SELECT entity.name AS name, COUNT(DISTINCT link.src) AS n
+                FROM entity LEFT JOIN link ON link.dst = 'entity:' || entity.id
+                GROUP BY entity.id ORDER BY n DESC
+                """)
+            let singletons = counts.filter { ($0["n"] as Int? ?? 0) == 1 }.count
+            let hubs = counts.compactMap { row -> (String, Int, Double)? in
+                let n = row["n"] as Int? ?? 0
+                let share = records > 0 ? Double(n) / Double(records) : 0
+                guard n > 1, share >= hubThreshold else { return nil }
+                return (row["name"] as String? ?? "?", n, share)
+            }
+            let relations = try Row.fetchAll(db, sql: """
+                SELECT rel AS name, COUNT(*) AS n FROM link GROUP BY rel ORDER BY n DESC
+                """).map { ($0["name"] as String? ?? "?", $0["n"] as Int? ?? 0) }
+
+            return GraphHealth(
+                records: records, entities: entities, links: links,
+                entitiesPerRecord: records > 0 ? Double(entities) / Double(records) : 0,
+                singletons: singletons,
+                singletonShare: entities > 0 ? Double(singletons) / Double(entities) : 0,
+                hubs: hubs, relations: relations
+            )
+        }
+    }
+
     public func links(from recordID: Int64) throws -> [Link] {
         try dbQueue.read { db in
             try Link.filter(Link.Columns.src == "record:\(recordID)").fetchAll(db)
