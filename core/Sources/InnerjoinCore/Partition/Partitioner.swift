@@ -82,6 +82,7 @@ public struct PartitionerRegistry: Sendable {
     public static let standard = PartitionerRegistry(partitioners: [
         PDFPartitioner(),
         ImagePartitioner(),
+        AudioPartitioner(),
         RichTextPartitioner(),
         PlainTextPartitioner(),
     ])

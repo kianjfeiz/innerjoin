@@ -6,12 +6,21 @@ No network, no API key, nothing leaves the Mac.
 ## Try it
 
 ```bash
-swift run ijparse add ~/Downloads          # read a folder
+swift run ijparse add ~/Downloads          # read a folder — no key needed
 swift run ijparse list                     # what's in the library
 swift run ijparse show 1                   # a document's markdown
-swift run ijparse show 1 --json            # its elements, with coordinates
 swift run ijparse find "lease penalty"     # full-text search
 swift run ijcheck                          # run the checks
+```
+
+With a model connected, files become records:
+
+```bash
+swift run ijparse key set anthropic sk-...  # stored in the keychain
+swift run ijparse understand                # everything not yet understood
+swift run ijparse record 1                  # fields, dates, links, with pages
+swift run ijparse upcoming                  # dates read out of your documents
+swift run ijparse who "Osei"                # every file mentioning someone
 ```
 
 Workspaces live at `~/Library/Application Support/innerjoin/Personal` by default;
@@ -20,14 +29,32 @@ Workspaces live at `~/Library/Application Support/innerjoin/Personal` by default
 
 ## What runs
 
-| Stage | Does | Technology |
-|---|---|---|
-| 0 · intake | hash, dedupe, copy into the vault, record the row | Foundation, CryptoKit, UTType |
-| 1 · partition | file → typed elements in reading order, with coordinates | PDFKit, Vision, AppKit |
-| 2 · rendition | elements → one markdown document with `[eN]` anchors | — |
+| Stage | Does | Technology | Needs a key |
+|---|---|---|---|
+| 0 · intake | hash, dedupe, copy into the vault, record the row | Foundation, CryptoKit, UTType | no |
+| 1 · partition | file → typed elements in reading order, with coordinates | PDFKit, Vision, Speech, AppKit | no |
+| 2 · rendition | elements → one markdown document with `[eN]` anchors | — | no |
+| 3 · distill | markdown → a record, its entities, and its dates | the user's model | **yes** |
 
-Stage 3 (turning markdown into records, entities, and relations) is the first step
-that needs a model, and isn't built yet. See [../STAGES.md](../STAGES.md).
+Stages 0–2 never touch the network, so innerjoin is a searchable library before any
+model is connected; understanding backfills later. Stages 4–6 (fuzzy entity
+resolution, embeddings, categories from graph clusters) are still to come — see
+[../STAGES.md](../STAGES.md).
+
+## Models
+
+Any model, your key. Three ways in:
+
+```bash
+IJ_PROVIDER=anthropic  IJ_MODEL=claude-sonnet-5        # Anthropic Messages API
+IJ_PROVIDER=openai     IJ_MODEL=gpt-4.1-mini           # OpenAI
+IJ_PROVIDER=openai     IJ_BASE_URL=http://localhost:11434/v1  # Ollama, LM Studio, vLLM…
+```
+
+The OpenAI-compatible adapter covers most of the world, including fully local models —
+so innerjoin can run end to end with nothing leaving the machine at all. Keys are read
+from `IJ_API_KEY` or the login keychain, and are never written to the database or the
+vault.
 
 ## Readers
 
@@ -39,6 +66,7 @@ that needs a model, and isn't built yet. See [../STAGES.md](../STAGES.md).
 | DOCX, RTF, HTML | `NSAttributedString` — native, no unzipping |
 | Markdown, text, JSON, XML | Foundation |
 | CSV, TSV | quote-aware parser → a markdown table |
+| Audio (m4a, mp3, wav…) | Speech framework — on-device, one element per utterance, stamped `[m:ss]` |
 
 The text-layer decision is made **per page**, so a scanned page inside a digital
 document still gets read.
@@ -108,4 +136,6 @@ Measured, not guessed — each of these was found by running adversarial documen
 | Rotated pages ignore `page.rotation` | Coordinates would be wrong on a rotated scan. |
 | DOCX tables flatten | `NSAttributedString` doesn't expose table structure; needs real XML parsing. |
 | CSV: 500-row preview, no embedded newlines | Rows are split before quotes are parsed, so a quoted field containing a newline breaks. |
-| No reader yet | `.xlsx`, `.pptx`, `.eml`, `.msg`, audio, video. |
+| No reader yet | `.xlsx`, `.pptx`, `.eml`, `.msg`, video. |
+| Audio needs a language model | Downloaded on first use; offline afterwards. |
+| Entity resolution is exact-match only | "Alcon" and "Alcon Labs" stay separate until Stage 4 adds fuzzy matching. |

@@ -78,6 +78,58 @@ public final class Store: Sendable {
             }
         }
 
+        // v2 — what a model adds. Kept separate so a library parsed without a key
+        // never carries empty tables it might never use.
+        m.registerMigration("v2_records_and_graph") { db in
+            try db.create(table: "record") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("document", onDelete: .cascade).notNull().unique()  // one doc, one record
+                t.column("kind", .text)
+                t.column("title", .text).notNull()
+                t.column("summary", .text)
+                t.column("category", .text)
+                t.column("happenedOn", .datetime)
+                t.column("amount", .double)
+                t.column("currency", .text)
+                t.column("fields", .text).notNull().defaults(to: "{}")
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(indexOn: "record", columns: ["category"])
+            try db.create(indexOn: "record", columns: ["happenedOn"])
+
+            try db.create(table: "entity") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull()
+                t.column("normName", .text).notNull()
+                t.column("kind", .text).notNull()
+                t.column("aliases", .text).notNull().defaults(to: "[]")
+                t.column("createdAt", .datetime).notNull()
+                t.uniqueKey(["normName", "kind"])
+            }
+
+            try db.create(table: "link") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("src", .text).notNull()
+                t.column("rel", .text).notNull()
+                t.column("dst", .text).notNull()
+                t.column("confidence", .double).notNull().defaults(to: 1.0)
+                t.column("documentID", .integer).references("document", onDelete: .cascade)
+                t.uniqueKey(["src", "rel", "dst"])
+            }
+            try db.create(indexOn: "link", columns: ["src"])
+            try db.create(indexOn: "link", columns: ["dst"])
+
+            try db.create(table: "recordDate") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("record", onDelete: .cascade).notNull()
+                t.column("kind", .text).notNull()
+                t.column("date", .datetime).notNull()
+                t.column("derived", .boolean).notNull().defaults(to: false)
+                t.column("source", .text)
+            }
+            try db.create(indexOn: "recordDate", columns: ["date"])
+        }
+
         return m
     }
 
@@ -125,6 +177,84 @@ public final class Store: Sendable {
     public func counts() throws -> (documents: Int, elements: Int) {
         try dbQueue.read { db in
             (try Document.fetchCount(db), try Element.fetchCount(db))
+        }
+    }
+
+    // MARK: - Records and graph
+
+    public func record(ofDocument documentID: Int64) throws -> Record? {
+        try dbQueue.read { db in
+            try Record.filter(Record.Columns.documentID == documentID).fetchOne(db)
+        }
+    }
+
+    public func records(limit: Int = 100) throws -> [Record] {
+        try dbQueue.read { db in
+            try Record.order(Record.Columns.happenedOn.desc).limit(limit).fetchAll(db)
+        }
+    }
+
+    /// Categories currently in use, most-used first — the taxonomy handed to the model.
+    public func categoryNames() throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(db, sql: """
+                SELECT category FROM record
+                WHERE category IS NOT NULL AND category <> ''
+                GROUP BY category ORDER BY COUNT(*) DESC LIMIT 40
+                """)
+        }
+    }
+
+    public func dates(ofRecord recordID: Int64) throws -> [RecordDate] {
+        try dbQueue.read { db in
+            try RecordDate
+                .filter(RecordDate.Columns.recordID == recordID)
+                .order(RecordDate.Columns.date)
+                .fetchAll(db)
+        }
+    }
+
+    /// Everything with a date between now and `days` out — the query the Today
+    /// briefing is built on.
+    public func upcoming(withinDays days: Int = 180) throws -> [(date: RecordDate, record: Record)] {
+        let now = Date()
+        let horizon = Calendar.current.date(byAdding: .day, value: days, to: now) ?? now
+        return try dbQueue.read { db in
+            let dates = try RecordDate
+                .filter(RecordDate.Columns.date >= now && RecordDate.Columns.date <= horizon)
+                .order(RecordDate.Columns.date)
+                .fetchAll(db)
+            let records = try Record.fetchAll(db, keys: Set(dates.map(\.recordID)))
+            let byID = Dictionary(records.compactMap { record in
+                record.id.map { ($0, record) }
+            }, uniquingKeysWith: { first, _ in first })
+            return dates.compactMap { date in
+                byID[date.recordID].map { (date, $0) }
+            }
+        }
+    }
+
+    public func entities(limit: Int = 100) throws -> [Entity] {
+        try dbQueue.read { db in
+            try Entity.order(Entity.Columns.name).limit(limit).fetchAll(db)
+        }
+    }
+
+    /// Every record connected to an entity — one query, and the whole dossier.
+    public func records(linkedTo entityID: Int64) throws -> [Record] {
+        try dbQueue.read { db in
+            try Record.fetchAll(db, sql: """
+                SELECT record.* FROM record
+                JOIN link ON link.src = 'record:' || record.id
+                WHERE link.dst = ?
+                ORDER BY record.happenedOn DESC
+                """, arguments: ["entity:\(entityID)"])
+        }
+    }
+
+    public func links(from recordID: Int64) throws -> [Link] {
+        try dbQueue.read { db in
+            try Link.filter(Link.Columns.src == "record:\(recordID)").fetchAll(db)
         }
     }
 }

@@ -25,6 +25,8 @@ struct Checks {
         await check("tables in text-layer pdfs are recovered", textLayerTables)
         await check("garbled text layers are recognized as junk", garbageDetection)
 
+        await check("audio is transcribed with timestamps", audioTranscription)
+
         print("\nStage 2 · rendition")
         await check("rendition formats structure and anchors facts", renditionFormatting)
         await check("every anchor resolves to a real element", anchorsResolve)
@@ -35,6 +37,8 @@ struct Checks {
 
         print("\nSearch")
         await check("full-text search works with no model connected", searchWithoutModel)
+
+        await distillChecks()
 
         print("\nGeometry")
         await check("bounding boxes convert from bottom-left origin", geometryConversion)
@@ -50,14 +54,14 @@ struct Checks {
 // MARK: - Support
 
 /// A throwaway workspace per check, removed afterwards.
-private func withWorkspace<T>(_ body: (Store) async throws -> T) async throws -> T {
+func withWorkspace<T>(_ body: (Store) async throws -> T) async throws -> T {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("ij-check-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
     return try await body(try Store(root: root))
 }
 
-private func fixture(_ name: String) throws -> URL {
+func fixture(_ name: String) throws -> URL {
     guard let url = Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: nil) else {
         throw CheckError("fixture \(name) is missing")
     }
@@ -240,6 +244,19 @@ private func garbageDetection() async throws {
     await expect(!PDFPartitioner.looksLikeGarbage(
         "Tenant shall pay $3,200.00 per month, due on the first day of each month."),
                  "ordinary prose is not junk")
+}
+
+private func audioTranscription() async throws {
+    try await withWorkspace { store in
+        let result = try await Ingest(store: store).add(fileAt: try fixture("memo.m4a"))
+        let markdown = try require(result.document.markdown, "a transcript")
+        // Timestamps stand in for page numbers: audio has no geometry to cite.
+        await expect(markdown.contains("[0:00]"), "utterances are stamped with their time")
+        await expect(markdown.lowercased().contains("lease"), "the speech was recognized")
+        await expect(result.elementCount > 1, "the transcript is split into citable pieces")
+        await expect(result.document.problem?.contains("Transcribed") == true,
+                     "the duration is reported")
+    }
 }
 
 // MARK: - Stage 2
