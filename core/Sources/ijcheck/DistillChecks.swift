@@ -22,6 +22,8 @@ func distillChecks() async {
     await check("a notice deadline is worked out, not asked for", derivedDeadline)
     await check("a provider failure leaves the document searchable", providerFailureIsSurvivable)
 
+    await check("search reaches what was understood, not just the text", searchReachesRecords)
+
     print("\nStage 3 · keeping the graph clean")
     await check("invented entities are refused", inventedEntitiesRefused)
     await check("roles and broad places are refused, real parties aren't", scenerRefused)
@@ -166,6 +168,28 @@ private func derivedDeadline() async throws {
         formatter.dateFormat = "yyyy-MM-dd"
         await expectEqual(formatter.string(from: deadline.date), "2027-01-30",
                           "60 days before the term ends")
+    }
+}
+
+private func searchReachesRecords() async throws {
+    try await withWorkspace { store in
+        let result = try await Ingest(store: store).add(fileAt: try fixture("lease.pdf"))
+        let documentID = try require(result.document.id, "document id")
+
+        // "Tenancy" appears nowhere in the file — only in what the model made of it.
+        // ⌘K exists to query understanding, so understanding has to be indexed.
+        let provider = ScriptedProvider(json: """
+        {"title":"Tenancy at Fillmore","summary":"A residential tenancy.",
+         "category":"Apartment","fields":[],"dates":[],"entities":[]}
+        """)
+        _ = try await Distill(store: store, provider: provider).understand(documentID: documentID)
+
+        await expect(try store.search("Tenancy").isEmpty,
+                     "the word is genuinely absent from the document text")
+        let hits = try store.find("Tenancy")
+        await expect(!hits.isEmpty, "but searching finds it through the record")
+        await expect(hits.first?.matchedRecord == true, "and says the match came from understanding")
+        await expectEqual(hits.first?.document.name, "lease.pdf", "pointing back at the right file")
     }
 }
 

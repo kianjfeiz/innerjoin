@@ -143,15 +143,26 @@ struct Find: AsyncParsableCommand {
     mutating func run() async throws {
         let store = try workspace.open()
         let text = query.joined(separator: " ")
-        let hits = try store.search(text)
+        // Searches both layers: the words in the file, and what was understood from
+        // it. Understood matches come first — a hit on an extracted amount beats one
+        // buried in body text.
+        let hits = try store.find(text)
         guard !hits.isEmpty else { print("Nothing matched \"\(text)\"."); return }
-        for document in hits {
-            print("\(String(document.id ?? 0).padded(5)) \(document.name)")
-            if let markdown = document.markdown, let snippet = snippet(of: markdown, around: text) {
-                print("      …\(snippet)…")
+
+        for hit in hits {
+            let mark = hit.matchedRecord ? "◆" : " "
+            let title = hit.record?.title ?? hit.document.name
+            print("\(String(hit.document.id ?? 0).padded(5))\(mark) \(title)")
+            if hit.record != nil, title != hit.document.name {
+                print("       in \(hit.document.name)")
+            }
+            if let markdown = hit.document.markdown, let snippet = snippet(of: markdown, around: text) {
+                print("       …\(snippet)…")
             }
         }
-        print("\n\(hits.count) match\(hits.count == 1 ? "" : "es")")
+        let understood = hits.filter(\.matchedRecord).count
+        print("\n\(hits.count) match\(hits.count == 1 ? "" : "es")"
+              + (understood > 0 ? " · ◆ \(understood) matched what was understood" : ""))
     }
 
     private func snippet(of markdown: String, around query: String, width: Int = 90) -> String? {
