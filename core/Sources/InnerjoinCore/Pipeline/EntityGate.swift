@@ -46,6 +46,14 @@ public struct EntityGate {
         // A role isn't a party. "Tenant" appears in every lease and identifies nobody.
         if Self.roleWords.contains(normalized) { return .reject("generic role") }
 
+        // Roles are productive in English — policyholder, accountholder, co-signer —
+        // so a list alone will always be a step behind. A single word built from a
+        // role suffix is a role, not a name.
+        if !normalized.contains(" "), Self.roleSuffixes.contains(where: { normalized.hasSuffix($0) }),
+           normalized.count > 5 {
+            return .reject("generic role")
+        }
+
         // Places have to be specific enough to be a subject. "1247 Fillmore St" is a
         // thing you can have a lease on; "California" is a hub waiting to happen.
         if Self.administrativeRegions.contains(normalized), !normalized.contains(where: \.isNumber) {
@@ -97,7 +105,15 @@ public struct EntityGate {
         "member", "patient", "provider", "contractor", "subcontractor", "owner",
         "occupant", "guarantor", "witness", "notary", "agent", "broker",
         "the undersigned", "undersigned", "vendor", "supplier", "bank", "landlords",
+        "policyholder", "policy holder", "beneficiary", "dependent", "subscriber",
+        "payee", "payer", "claimant", "signatory", "co-signer", "cosigner",
+        "manager", "administrator", "trustee", "executor", "guardian", "operator",
+        "passenger", "guest", "resident", "student", "staff", "team",
     ]
+
+    /// English builds role nouns from a handful of endings; matching the ending keeps
+    /// this from having to enumerate every one.
+    static let roleSuffixes: [String] = ["holder", "payer", "payee", "signer", "writer"]
 
     /// Regions coarse enough that nearly every document mentions one. Admitted only
     /// when the name also carries a number, which is what makes a street address.

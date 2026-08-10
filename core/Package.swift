@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "InnerjoinCore", targets: ["InnerjoinCore"]),
         .executable(name: "ijparse", targets: ["ijparse"]),
         .executable(name: "ijcheck", targets: ["ijcheck"]),
+        .executable(name: "ijeval", targets: ["ijeval"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.11.1"),
@@ -24,6 +25,12 @@ let package = Package(
                 "InnerjoinCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
+        ),
+        // Scores the pipeline against a corpus whose truth is known, at several
+        // levels of simulated model error. Run with `swift run ijeval`.
+        .executableTarget(
+            name: "ijeval",
+            dependencies: ["InnerjoinCore"]
         ),
         // The checks run as a plain executable rather than a test target: swift-testing
         // and XCTest both need a full Xcode install to link, and the preprocessor should

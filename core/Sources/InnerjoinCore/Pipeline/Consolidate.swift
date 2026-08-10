@@ -82,9 +82,14 @@ public struct Consolidate: Sendable {
 
         let longWords = longer.split(separator: " ")
         let shortWords = shorter.split(separator: " ")
+        // Requiring strictly fewer words is what keeps "Ann" away from "Anna": both
+        // are single words, so this never fires for them. That guard alone is enough,
+        // which is why the short form only needs to be distinctive, not long — an
+        // organization abbreviated to "Eye" is still unmistakably one organization.
         if shortWords.count < longWords.count,
            shortWords.count >= 1,
-           shorter.count >= 4,
+           shorter.count >= 3,
+           !Self.tooCommonToMatchOn.contains(shorter),
            Array(longWords.prefix(shortWords.count)) == shortWords {
             return "short form"
         }
@@ -92,6 +97,13 @@ public struct Consolidate: Sendable {
         let score = similarity(longer, shorter)
         return score >= mergeThreshold ? String(format: "%.0f%% alike", score * 100) : nil
     }
+
+    /// Words that start far too many names to identify one. "The Harbour Inn" and
+    /// "The Chen Clinic" both begin with "the", and merging on that would be a disaster.
+    static let tooCommonToMatchOn: Set<String> = [
+        "the", "a", "an", "and", "for", "new", "old", "one", "two", "st", "dr",
+        "mr", "ms", "mrs", "san", "los", "las", "north", "south", "east", "west",
+    ]
 
     /// Dice coefficient over character trigrams.
     public static func similarity(_ a: String, _ b: String) -> Double {
