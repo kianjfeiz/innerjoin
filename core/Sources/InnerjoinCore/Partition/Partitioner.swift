@@ -83,6 +83,8 @@ public struct PartitionerRegistry: Sendable {
         PDFPartitioner(),
         ImagePartitioner(),
         AudioPartitioner(),
+        EmailPartitioner(),
+        OfficePartitioner(),
         RichTextPartitioner(),
         PlainTextPartitioner(),
     ])

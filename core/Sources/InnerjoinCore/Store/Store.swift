@@ -130,6 +130,20 @@ public final class Store: Sendable {
             try db.create(indexOn: "recordDate", columns: ["date"])
         }
 
+        // v3 — make what the model understood searchable too. Without this, ⌘K can
+        // only find words that appear literally in a file, not the titles, summaries,
+        // and field values that are the whole point of understanding a document.
+        m.registerMigration("v3_record_search") { db in
+            try db.create(virtualTable: "recordSearch", using: FTS5()) { t in
+                t.synchronize(withTable: "record")
+                t.column("title")
+                t.column("summary")
+                t.column("category")
+                t.column("fields")
+                t.tokenizer = .porter(wrapping: .unicode61())
+            }
+        }
+
         return m
     }
 
@@ -157,6 +171,50 @@ public final class Store: Sendable {
                 .filter(Element.Columns.documentID == documentID)
                 .order(Element.Columns.position)
                 .fetchAll(db)
+        }
+    }
+
+    /// What a query matched, and why — so a result can say whether it came from the
+    /// document itself or from what was understood about it.
+    public struct Hit: Sendable {
+        public let document: Document
+        public let record: Record?
+        public let matchedRecord: Bool
+    }
+
+    /// Searches both layers at once: the text of the file, and the understanding built
+    /// from it. Record matches rank first — a hit on an extracted title or amount is a
+    /// better answer than a hit buried in body text.
+    public func find(_ query: String, limit: Int = 20) throws -> [Hit] {
+        try dbQueue.read { db in
+            guard let pattern = FTS5Pattern(matchingAllTokensIn: query) else { return [] }
+
+            let recordRows = try Record.fetchAll(db, sql: """
+                SELECT record.* FROM record
+                JOIN recordSearch ON recordSearch.rowid = record.id
+                WHERE recordSearch MATCH ? ORDER BY bm25(recordSearch) LIMIT ?
+                """, arguments: [pattern, limit])
+
+            var hits: [Hit] = []
+            var seen = Set<Int64>()
+            for record in recordRows {
+                guard let document = try Document.fetchOne(db, key: record.documentID) else { continue }
+                seen.insert(record.documentID)
+                hits.append(Hit(document: document, record: record, matchedRecord: true))
+            }
+
+            let documentRows = try Document.fetchAll(db, sql: """
+                SELECT document.* FROM document
+                JOIN documentSearch ON documentSearch.rowid = document.id
+                WHERE documentSearch MATCH ? ORDER BY bm25(documentSearch) LIMIT ?
+                """, arguments: [pattern, limit])
+
+            for document in documentRows {
+                guard let id = document.id, !seen.contains(id) else { continue }
+                let record = try Record.filter(Record.Columns.documentID == id).fetchOne(db)
+                hits.append(Hit(document: document, record: record, matchedRecord: false))
+            }
+            return Array(hits.prefix(limit))
         }
     }
 
