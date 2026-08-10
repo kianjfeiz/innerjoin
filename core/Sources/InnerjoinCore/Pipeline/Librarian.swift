@@ -18,14 +18,19 @@ public actor Librarian {
     /// Concurrent model calls. Small on purpose: providers rate-limit, and a burst
     /// that trips a limit is slower than a steady trickle.
     let understandingLanes: Int
+    /// Whether extraction gets the library's accumulated vocabulary. Off is only for
+    /// measuring what that feedback is worth.
+    let learningEnabled: Bool
 
     public init(
         store: Store,
         registry: PartitionerRegistry = .standard,
         provider: (any ModelProvider)? = nil,
         readingLanes: Int = max(1, ProcessInfo.processInfo.activeProcessorCount - 1),
-        understandingLanes: Int = 3
+        understandingLanes: Int = 3,
+        learningEnabled: Bool = true
     ) {
+        self.learningEnabled = learningEnabled
         self.store = store
         self.registry = registry
         self.provider = provider
@@ -60,6 +65,7 @@ public actor Librarian {
     public func absorb(
         _ inputs: [URL],
         understand: Bool = true,
+        settle: Bool = true,
         onProgress: (@Sendable (Progress) -> Void)? = nil
     ) async throws -> Summary {
         let started = Date()
@@ -113,7 +119,7 @@ public actor Librarian {
 
         // ---- understand, rate-limited ----
         if understand, let provider {
-            let distill = Distill(store: store, provider: provider)
+            let distill = Distill(store: store, provider: provider, learningEnabled: learningEnabled)
             var cursor = 0
             while cursor < readyToUnderstand.count {
                 let batch = Array(readyToUnderstand[cursor..<min(cursor + understandingLanes,
@@ -145,10 +151,18 @@ public actor Librarian {
                 }
             }
 
-            // ---- tidy and re-sort, once, at the end ----
-            // Both look at the whole library, so running them per file would be waste.
+            // ---- tidy, sort, settle, sort again ----
+            // All of these look at the whole library, so running them per file would
+            // be waste. Settling comes after sorting because a document can only be
+            // compared with its peers once it has some.
             _ = try await Consolidate(store: store).run()
             _ = try await Organize(store: store).run()
+            if settle {
+                // Re-reads only the documents that describe things unlike their peers,
+                // which is a small fraction — and the categories can shift once they do.
+                _ = try await Refine(store: store, provider: provider).run()
+                _ = try await Organize(store: store).run()
+            }
         }
 
         return Summary(
@@ -178,7 +192,7 @@ public actor Librarian {
         guard let provider else {
             return Summary(read: 0, understood: 0, alreadyPresent: 0, failed: 0, problems: [], seconds: 0)
         }
-        let distill = Distill(store: store, provider: provider)
+        let distill = Distill(store: store, provider: provider, learningEnabled: learningEnabled)
         var progress = Progress(total: ids.count)
         var problems: [(String, String)] = []
 

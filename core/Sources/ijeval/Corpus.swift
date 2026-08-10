@@ -17,11 +17,44 @@ enum Corpus {
         let area: String
         /// Entities a correct reading would find.
         let entities: [String]
-        /// Facts that must survive parsing intact, checked as substrings of the markdown.
-        let facts: [String]
+        /// Facts that must survive parsing intact, as (concept, text). The concept is
+        /// the canonical field name; a model left to itself will call it something
+        /// slightly different on every document, which is the drift being measured.
+        let facts: [(concept: String, value: String)]
         /// Names that appear in the text but are scenery, and must not become entities.
         let scenery: [String]
     }
+
+    /// The names a model reaches for when nobody tells it which to use. Every list
+    /// means one thing; a library that ends up using all three has three columns where
+    /// it should have one.
+    static let synonyms: [String: [String]] = [
+        "rent_monthly":   ["rent_monthly", "monthly_rent", "rent_amount"],
+        "term_end":       ["term_end", "lease_end_date", "end_of_term"],
+        "deposit":        ["deposit", "security_deposit", "deposit_amount"],
+        "total_due":      ["total_due", "amount_due", "invoice_total"],
+        "invoice_date":   ["invoice_date", "date_of_invoice", "issued_on"],
+        "deductible":     ["deductible", "annual_deductible", "deductible_amount"],
+        "expires":        ["expires", "expiry_date", "coverage_end"],
+        "balance":        ["balance", "patient_balance", "amount_outstanding"],
+        "statement_date": ["statement_date", "date_of_statement", "period_end"],
+        "fare":           ["fare", "ticket_price", "total_paid"],
+        "departure":      ["departure", "departure_date", "travel_date"],
+        "plate":          ["plate", "plate_number", "registration_number"],
+        "fee":            ["fee", "fee_paid", "registration_fee"],
+        "closing":        ["closing", "closing_balance", "ending_balance"],
+        "ends":           ["ends", "termination_date", "contract_end"],
+        "note":           ["note", "detail", "content"],
+    ]
+
+    /// Maps any variant back to what it means, so consistency can be scored.
+    static let conceptOf: [String: String] = {
+        var map: [String: String] = [:]
+        for (concept, variants) in synonyms {
+            for variant in variants { map[variant] = concept }
+        }
+        return map
+    }()
 
     static func build(in folder: URL) throws -> [Expected] {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -164,7 +197,7 @@ enum Corpus {
         ], scanned: false)
         return Expected(file: "lease_2024.pdf", area: "Apartment",
                         entities: ["M. Osei", "1247 Fillmore St"],
-                        facts: ["$3,200.00", "2027-03-31", "$4,800.00"],
+                        facts: [("rent_monthly", "$3,200.00"), ("term_end", "2027-03-31"), ("deposit", "$4,800.00")],
                         scenery: ["Tenant", "Landlord", "San Francisco", "CA"])
     }
 
@@ -183,7 +216,7 @@ enum Corpus {
         """, to: folder.appendingPathComponent("lease_amendment.eml"))
         return Expected(file: "lease_amendment.eml", area: "Apartment",
                         entities: ["M. Osei", "1247 Fillmore St"],
-                        facts: ["one month's rent", "60 days notice"], scenery: [])
+                        facts: [("note", "one month's rent"), ("note", "60 days notice")], scenery: [])
     }
 
     private static func renewal(_ folder: URL) throws -> Expected {
@@ -196,7 +229,7 @@ enum Corpus {
         ], scanned: false)
         return Expected(file: "lease_renewal_2026.pdf", area: "Apartment",
                         entities: ["M. Osei", "1247 Fillmore St"],
-                        facts: ["$3,200.00", "2027-03-31"], scenery: [])
+                        facts: [("rent_monthly", "$3,200.00"), ("term_end", "2027-03-31")], scenery: [])
     }
 
     private static func utilityBill(_ folder: URL, month: String, amount: String) throws -> Expected {
@@ -209,7 +242,7 @@ enum Corpus {
         ], scanned: false)
         return Expected(file: name, area: "Apartment",
                         entities: ["Pacific Gas and Electric", "1247 Fillmore St"],
-                        facts: ["$\(amount)"], scenery: [])
+                        facts: [("total_due", "$\(amount)")], scenery: [])
     }
 
     // MARK: - Supplies
@@ -227,7 +260,7 @@ enum Corpus {
         ], scanned: scanned)
         return Expected(file: name, area: "Supplies",
                         entities: ["Alcon Laboratories", "Eye Care of East Bay"],
-                        facts: scanned ? [] : ["$\(total)", date], scenery: [])
+                        facts: scanned ? [] : [("total_due", "$\(total)"), ("invoice_date", date)], scenery: [])
     }
 
     private static func ledger(_ folder: URL) throws -> Expected {
@@ -240,7 +273,7 @@ enum Corpus {
         """, to: folder.appendingPathComponent("supplier_ledger.csv"))
         return Expected(file: "supplier_ledger.csv", area: "Supplies",
                         entities: ["Alcon Laboratories"],
-                        facts: ["390.00", "845.00"], scenery: [])
+                        facts: [("total_due", "390.00"), ("note", "845.00")], scenery: [])
     }
 
     // MARK: - Health
@@ -255,7 +288,7 @@ enum Corpus {
         ], scanned: false)
         return Expected(file: "health_policy_2026.pdf", area: "Health",
                         entities: ["State Farm", "Chen Clinic"],
-                        facts: ["$1,500.00", "2026-12-31"], scenery: ["Policyholder"])
+                        facts: [("deductible", "$1,500.00"), ("expires", "2026-12-31")], scenery: ["Policyholder"])
     }
 
     private static func clinicStatement(_ folder: URL) throws -> Expected {
@@ -267,7 +300,7 @@ enum Corpus {
         ], scanned: false)
         return Expected(file: "clinic_statement.pdf", area: "Health",
                         entities: ["Chen Clinic", "State Farm"],
-                        facts: ["$128.50", "2026-05-04"], scenery: [])
+                        facts: [("balance", "$128.50"), ("statement_date", "2026-05-04")], scenery: [])
     }
 
     private static func insuranceCard(_ folder: URL) throws -> Expected {
@@ -312,7 +345,7 @@ enum Corpus {
         """, to: folder.appendingPathComponent("flight_booking.eml"))
         return Expected(file: "flight_booking.eml", area: "Travel",
                         entities: ["Skyline Air", "Harbourview Inn"],
-                        facts: ["$412.60", "2026-10-03"],
+                        facts: [("fare", "$412.60"), ("departure", "2026-10-03")],
                         scenery: ["San Francisco", "New York"])
     }
 
@@ -325,7 +358,7 @@ enum Corpus {
         ], scanned: false)
         return Expected(file: "trip_itinerary.pdf", area: "Travel",
                         entities: ["Skyline Air", "Harbourview Inn"],
-                        facts: ["$624.00", "2026-10-07"], scenery: [])
+                        facts: [("fare", "$624.00"), ("departure", "2026-10-07")], scenery: [])
     }
 
     // MARK: - Unrelated
@@ -339,7 +372,7 @@ enum Corpus {
         - dish soap
         """, to: folder.appendingPathComponent("shopping.md"))
         return Expected(file: "shopping.md", area: "Everything else",
-                        entities: [], facts: ["coffee beans"], scenery: [])
+                        entities: [], facts: [("note", "coffee beans")], scenery: [])
     }
 
     // MARK: - Awkward shapes
@@ -357,7 +390,7 @@ enum Corpus {
         ], scanned: false)
         return Expected(file: "registration_form.pdf", area: "Everything else",
                         entities: ["State Farm"],
-                        facts: ["7XKD449", "2027-08-31", "$214.00"], scenery: ["Owner"])
+                        facts: [("plate", "7XKD449"), ("expires", "2027-08-31"), ("fee", "$214.00")], scenery: ["Owner"])
     }
 
     /// Many rows of numbers — the shape most likely to be flattened into a soup of
@@ -381,7 +414,7 @@ enum Corpus {
         try pdf(folder.appendingPathComponent("bank_statement_june.pdf"), lines: lines, scanned: false)
         return Expected(file: "bank_statement_june.pdf", area: "Everything else",
                         entities: ["First Harbour Bank"],
-                        facts: ["$1,284.55", "2026-06-30"], scenery: ["Deposit"])
+                        facts: [("closing", "$1,284.55"), ("statement_date", "2026-06-30")], scenery: ["Deposit"])
     }
 
     /// Long enough to span pages, so pagination and the token budget both get exercised.
@@ -397,7 +430,7 @@ enum Corpus {
         try pdf(folder.appendingPathComponent("service_agreement.pdf"), lines: lines, scanned: false)
         return Expected(file: "service_agreement.pdf", area: "Supplies",
                         entities: ["Alcon Laboratories", "Eye Care of East Bay"],
-                        facts: ["2028-01-31"], scenery: [])
+                        facts: [("ends", "2028-01-31")], scenery: [])
     }
 
     /// Not English. Accented characters must survive normalization, and the language
@@ -413,7 +446,7 @@ enum Corpus {
         """, to: folder.appendingPathComponent("mietanpassung.md"))
         return Expected(file: "mietanpassung.md", area: "Apartment",
                         entities: ["M. Osei", "1247 Fillmore St"],
-                        facts: ["3.400,00 EUR", "2027-04-01"], scenery: [])
+                        facts: [("rent_monthly", "3.400,00 EUR"), ("term_end", "2027-04-01")], scenery: [])
     }
 
     private static func spreadsheet(_ folder: URL) throws -> Expected {
@@ -435,7 +468,7 @@ enum Corpus {
         try archive.write(to: folder.appendingPathComponent("annual_spend.xlsx"))
         return Expected(file: "annual_spend.xlsx", area: "Supplies",
                         entities: ["Alcon Laboratories"],
-                        facts: ["1447.50", "Chen Clinic"], scenery: [])
+                        facts: [("total_due", "1447.50"), ("note", "Chen Clinic")], scenery: [])
     }
 
     private static func deck(_ folder: URL) throws -> Expected {
@@ -452,7 +485,7 @@ enum Corpus {
         try archive.write(to: folder.appendingPathComponent("supplier_review.pptx"))
         return Expected(file: "supplier_review.pptx", area: "Supplies",
                         entities: ["Alcon Laboratories", "Eye Care of East Bay"],
-                        facts: ["$1,447.50"], scenery: [])
+                        facts: [("total_due", "$1,447.50")], scenery: [])
     }
 
     private static func recipe(_ folder: URL) throws -> Expected {
@@ -463,6 +496,6 @@ enum Corpus {
         Finish with olive oil and lemon.
         """, to: folder.appendingPathComponent("recipe.md"))
         return Expected(file: "recipe.md", area: "Everything else",
-                        entities: [], facts: ["three hours"], scenery: [])
+                        entities: [], facts: [("note", "three hours")], scenery: [])
     }
 }

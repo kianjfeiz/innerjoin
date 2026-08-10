@@ -9,20 +9,41 @@ import InnerjoinCore
 @main
 struct Eval {
     static func main() async throws {
-        let levels = ProcessInfo.processInfo.arguments.contains("--quick")
-            ? [0.4] : [0.0, 0.4, 0.9]
+        let quick = ProcessInfo.processInfo.arguments.contains("--quick")
+        let levels = quick ? [0.4] : [0.0, 0.4, 0.9]
 
         var allPassed = true
         for noise in levels {
-            let report = try await run(noise: noise)
+            let report = try await run(noise: noise, mode: .learning)
             report.print()
             allPassed = allPassed && report.passed
         }
+
+        // What the learning loop is actually worth, measured rather than asserted.
+        print("\n══ what the library learns from itself " + String(repeating: "═", count: 25))
+        for noise in (quick ? [0.4] : [0.0, 0.4, 0.9]) {
+            let cold = try await run(noise: noise, mode: .noLearning)
+            let warm = try await run(noise: noise, mode: .learning)
+            let converged = try await run(noise: noise, mode: .refined)
+            print(String(format: "  noise %2.0f%%   nothing fed back %3.0f%%  →  vocabulary fed back %3.0f%%  →  after re-reading %3.0f%%",
+                         noise * 100,
+                         cold.schemaCoherence * 100,
+                         warm.schemaCoherence * 100,
+                         converged.schemaCoherence * 100))
+            // Feeding the library's own vocabulary back must measurably help, and
+            // re-reading must not undo it. Both are the point of the loop.
+            if warm.schemaCoherence <= cold.schemaCoherence + 0.05 { allPassed = false }
+            if converged.schemaCoherence + 0.001 < warm.schemaCoherence { allPassed = false }
+            if converged.schemaCoherence < 0.92 { allPassed = false }
+        }
+
         print(allPassed ? "\nAll thresholds met." : "\nSome thresholds missed.")
         if !allPassed { exit(1) }
     }
 
-    static func run(noise: Double) async throws -> Report {
+    enum Mode { case noLearning, learning, refined }
+
+    static func run(noise: Double, mode: Mode) async throws -> Report {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("ijeval-\(UUID().uuidString)")
         let corpusFolder = root.appendingPathComponent("corpus")
@@ -33,12 +54,17 @@ struct Eval {
         let byFile = Dictionary(uniqueKeysWithValues: truth.map { ($0.file, $0) })
         let store = try Store(root: root.appendingPathComponent("workspace"))
 
+        let provider = Simulator(expected: byFile, noise: noise)
         let librarian = Librarian(
-            store: store,
-            provider: Simulator(expected: byFile, noise: noise),
-            understandingLanes: 4
+            store: store, provider: provider,
+            understandingLanes: 4,
+            learningEnabled: mode != .noLearning
         )
-        _ = try await librarian.absorb([corpusFolder])
+        _ = try await librarian.absorb([corpusFolder], settle: mode != .noLearning)
+        if mode == .refined {
+            _ = try await Refine(store: store, provider: provider).run()
+            _ = try await Organize(store: store).run()
+        }
 
         var report = try score(store: store, truth: truth, noise: noise)
         report.brokenFilesExpected = failures.count
@@ -67,8 +93,8 @@ struct Eval {
             let markdown = document.markdown ?? ""
             for fact in expectation.facts {
                 factsExpected += 1
-                if markdown.contains(fact) { factsFound += 1 }
-                else { report.missedFacts.append("\(expectation.file): \(fact)") }
+                if markdown.contains(fact.value) { factsFound += 1 }
+                else { report.missedFacts.append("\(expectation.file): \(fact.value)") }
             }
         }
         report.factsExpected = factsExpected
@@ -140,6 +166,29 @@ struct Eval {
             return "\(entity.name)\(alias) ×\(count)"
         }.sorted()
 
+        // Schema coherence: within a category, does one fact concept have one name?
+        // Three names for the same thing is three columns that can never be compared.
+        var namesByConcept: [String: [String: Int]] = [:]
+        for document in documents {
+            guard let id = document.id, let record = try store.record(ofDocument: id),
+                  let category = record.category else { continue }
+            for name in record.fields.keys {
+                guard let concept = Corpus.conceptOf[name] else { continue }
+                namesByConcept["\(category)/\(concept)", default: [:]][name, default: 0] += 1
+            }
+        }
+        var uses = 0, dominant = 0
+        for (_, variants) in namesByConcept {
+            let total = variants.values.reduce(0, +)
+            uses += total
+            dominant += variants.values.max() ?? 0
+            if variants.count > 1 {
+                report.splitConcepts.append(variants.keys.sorted().joined(separator: " / "))
+            }
+        }
+        report.fieldUses = uses
+        report.fieldUsesOnDominantName = dominant
+
         let health = try store.graphHealth()
         report.singletonShare = health.singletonShare
         report.entitiesPerRecord = health.entitiesPerRecord
@@ -162,12 +211,16 @@ struct Report {
     var impureCategories: [String] = []
     var entityNames: [String] = []
     var brokenFilesExpected = 0, brokenFilesHandled = 0
+    var fieldUses = 0, fieldUsesOnDominantName = 0
+    var splitConcepts: [String] = []
 
     var readRate: Double { ratio(filesRead, filesExpected) }
     var factRate: Double { ratio(factsFound, factsExpected) }
     var entityRecall: Double { ratio(entitiesFound, entitiesExpected) }
     var categoryPurity: Double { ratio(documentsInPureCategory, documentsCategorized) }
     var citationValidity: Double { citationsStored == 0 ? 1 : ratio(citationsValid, citationsStored) }
+    /// 1.0 means every category calls each fact by a single name.
+    var schemaCoherence: Double { ratio(fieldUsesOnDominantName, fieldUses) }
 
     private func ratio(_ a: Int, _ b: Int) -> Double { b == 0 ? 1 : Double(a) / Double(b) }
 
@@ -184,7 +237,7 @@ struct Report {
     var passed: Bool {
         readRate >= 0.99 && factRate >= 0.98 && citationValidity >= 0.999
             && entityRecall >= 0.95 && categoryPurity >= 0.90 && sceneryAdmitted == 0
-            && brokenFilesHandled == brokenFilesExpected
+            && brokenFilesHandled == brokenFilesExpected && schemaCoherence >= 0.90
     }
 
     func print() {
@@ -196,6 +249,7 @@ struct Report {
         Swift.print("  scenery kept out    \(sceneryAdmitted == 0 ? " yes" : "  NO")   \(admittedScenery.joined(separator: ", "))")
         Swift.print("  category purity     \(percent(categoryPurity))   \(documentsInPureCategory)/\(documentsCategorized) placed")
         Swift.print("  citations valid     \(percent(citationValidity))   \(citationsValid)/\(citationsStored)")
+        Swift.print("  schema coherence    \(percent(schemaCoherence))   \(fieldUsesOnDominantName)/\(fieldUses) field uses on one name")
         Swift.print("  singleton entities  \(percent(singletonShare))")
         Swift.print("  broken files        \(brokenFilesHandled == brokenFilesExpected ? " ok" : " NO")   \(brokenFilesHandled)/\(brokenFilesExpected) failed visibly")
         Swift.print("  categories: " + (categories.isEmpty ? "none"
@@ -203,6 +257,7 @@ struct Report {
         for line in missedFacts.prefix(6)      { Swift.print("    missed fact:    \(line)") }
         for line in missedEntities.prefix(6)   { Swift.print("    missed entity:  \(line)") }
         for line in impureCategories.prefix(6) { Swift.print("    mixed category: \(line)") }
+        for line in splitConcepts.prefix(6)    { Swift.print("    split naming:   \(line)") }
         Swift.print("  entities: " + entityNames.joined(separator: " | "))
         Swift.print("  → \(passed ? "meets thresholds" : "BELOW THRESHOLD")")
     }

@@ -6,13 +6,57 @@ import Foundation
 /// apart — a mismatch between them is silent and shows up as missing facts.
 enum Prompt {
 
+    /// What the library has learned so far, handed back to the model.
+    ///
+    /// This is the whole of innerjoin's "training": no weights change, but each
+    /// document is read with the benefit of every document read before it. The
+    /// vocabulary a category has settled on, and one worked example from it, do more
+    /// to make the hundredth invoice match the first than any amount of instruction.
+    struct Learned {
+        var categories: [String] = []
+        var fieldNames: [String] = []
+        var exemplar: Record?
+
+        static let none = Learned()
+    }
+
     /// Stable across documents, so providers that cache prompt prefixes get to.
     /// The taxonomy goes here for the same reason.
     static func system(categories: [String]) -> String {
+        system(Learned(categories: categories))
+    }
+
+    static func system(_ learned: Learned) -> String {
+        let categories = learned.categories
         let known = categories.isEmpty
             ? "There are no categories yet — propose the one that fits."
             : "Categories in use: " + categories.joined(separator: ", ") +
               ". Reuse one of these when it fits; propose a new one only when none does."
+
+        var learnedBlock = ""
+        if !learned.fieldNames.isEmpty {
+            learnedBlock += """
+
+
+                KNOWN FIELD NAMES: \(learned.fieldNames.joined(separator: ", "))
+                Reuse one of those names exactly when it means the same thing. Only \
+                invent a name for something genuinely new — a second name for the same \
+                fact splits one column into two and makes the values impossible to \
+                compare.
+                """
+        }
+        if let exemplar = learned.exemplar, !exemplar.fields.isEmpty {
+            let sample = exemplar.fields.sorted { $0.key < $1.key }.prefix(6)
+                .map { "  \($0.key): \($0.value.value)" }.joined(separator: "\n")
+            learnedBlock += """
+
+
+                A previous document of this kind was read as:
+                  title: \(exemplar.title)
+                \(sample)
+                Match that shape where this document supports it.
+                """
+        }
 
         return """
         You read a document and return what it says as structured data.
@@ -33,7 +77,7 @@ enum Prompt {
         in, the bank in the footer, the notary, a job title like "Tenant" — no. Most \
         documents have between one and five. Returning more is usually a mistake.
         - If the document states a notice period in days, put the number in \
-        `notice_days`. Do not calculate the deadline; that is done for you.
+        `notice_days`. Do not calculate the deadline; that is done for you.\(learnedBlock)
         """
     }
 

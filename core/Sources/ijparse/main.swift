@@ -9,7 +9,7 @@ struct IJParse: AsyncParsableCommand {
         abstract: "innerjoin's on-device preprocessor — read files into markdown and elements.",
         subcommands: [Add.self, Show.self, List.self, Find.self,
                       Understand.self, Record.self, Upcoming.self, Who.self,
-                      Graph.self, Tidy.self, Sort.self, Key.self],
+                      Graph.self, Tidy.self, Sort.self, Settle.self, Key.self],
         defaultSubcommand: Add.self
     )
 }
@@ -413,6 +413,43 @@ struct Sort: AsyncParsableCommand {
             // Worth surfacing: a hub is usually a sign extraction is naming scenery.
             print("\nignored as too common to be meaningful: \(outcome.ignoredHubs.joined(separator: ", "))")
         }
+    }
+}
+
+// MARK: - settle
+
+struct Settle: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "settle",
+        abstract: "Re-read documents that describe things differently from their peers.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Option(help: "anthropic | openai | mock.") var provider: String?
+    @Option(help: "Model identifier.") var model: String?
+
+    mutating func run() async throws {
+        let store = try workspace.open()
+        var environment = ProcessInfo.processInfo.environment
+        if let provider { environment["IJ_PROVIDER"] = provider }
+        if let model { environment["IJ_MODEL"] = model }
+        let settings = ProviderSettings.fromEnvironment(environment)
+
+        let refine = Refine(store: store, provider: settings.makeProvider())
+        let before = try refine.coherence()
+        let passes = try await refine.run()
+
+        guard !passes.isEmpty else {
+            print(String(format: "Nothing to settle — the library already agrees with itself (%.0f%%).",
+                         before * 100))
+            return
+        }
+        for (index, pass) in passes.enumerated() {
+            print(String(format: "pass %d · re-read %d · %.0f%% → %.0f%%",
+                         index + 1, pass.reread.count,
+                         pass.coherenceBefore * 100, pass.coherenceAfter * 100))
+            for name in pass.reread.prefix(8) { print("    \(name)") }
+        }
+        _ = try await InnerjoinCore.Organize(store: store).run()
     }
 }
 

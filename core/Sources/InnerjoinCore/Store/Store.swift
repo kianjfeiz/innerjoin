@@ -263,6 +263,45 @@ public final class Store: Sendable {
         }
     }
 
+    /// What a category has learned to call things.
+    ///
+    /// Left to itself a model will call the same fact `rent_monthly` on one lease,
+    /// `monthly_rent` on the next and `rent_amount` on the third — three columns where
+    /// there should be one, and a table that can never be summed. Feeding back the
+    /// names already in use is what makes a category converge on a schema instead of
+    /// accumulating synonyms.
+    public func fieldVocabulary(for category: String?, limit: Int = 14) throws -> [String] {
+        try dbQueue.read { db in
+            let records: [Record]
+            if let category, !category.isEmpty {
+                records = try Record.filter(Record.Columns.category == category).fetchAll(db)
+            } else {
+                records = try Record.order(Record.Columns.id.desc).limit(80).fetchAll(db)
+            }
+            var counts: [String: Int] = [:]
+            for record in records {
+                for name in record.fields.keys { counts[name, default: 0] += 1 }
+            }
+            return counts.sorted { ($0.value, $1.key) > ($1.value, $0.key) }
+                .prefix(limit).map(\.key)
+        }
+    }
+
+    /// A previous record from the same category, to show rather than describe.
+    ///
+    /// One worked example teaches a model more about what a good extraction of *this
+    /// kind of document* looks like than another paragraph of instructions.
+    public func exemplar(for category: String?) throws -> Record? {
+        guard let category, !category.isEmpty else { return nil }
+        return try dbQueue.read { db in
+            // The richest example available: most fields, so it demonstrates the most.
+            try Record.filter(Record.Columns.category == category)
+                .fetchAll(db)
+                .filter { !$0.fields.isEmpty }
+                .max { $0.fields.count < $1.fields.count }
+        }
+    }
+
     public func dates(ofRecord recordID: Int64) throws -> [RecordDate] {
         try dbQueue.read { db in
             try RecordDate

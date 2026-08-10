@@ -26,10 +26,36 @@ swift run ijparse sort                      # re-derive categories from the grap
 swift run ijparse graph                     # is the graph healthy or bloating?
 ```
 
+## How the library learns from itself
+
+No weights are fine-tuned — that isn't what a BYO-key app can do. What it does instead
+is read each document with the benefit of every document read before it:
+
+1. **Vocabulary feedback.** A category's field names are handed back to the model on
+   the next document of that kind. Left to itself a model calls the same fact
+   `rent_monthly`, then `monthly_rent`, then `rent_amount` — three columns where there
+   should be one, and a table that can never be summed.
+2. **A worked example.** One prior record from the same category is shown rather than
+   described. It teaches more about what a good reading of *this kind of document*
+   looks like than another paragraph of rules.
+3. **A settling pass.** The first document of a kind was read with nothing to go on, so
+   by the tenth it's the odd one out. `Refine` finds records whose field names disagree
+   with their peers and reads them again in light of what the category has since
+   settled on. It converges, and stops when nothing diverges.
+
+Measured on the eval corpus, as a share of field uses landing on one agreed name:
+
+| | nothing fed back | vocabulary fed back | after settling |
+|---|---|---|---|
+| coherence | 67% | 97% | 97% |
+
+Settling runs automatically at the end of ingestion — it only re-reads the minority
+that disagree, so it's a small fraction of extra calls. `ijparse settle` runs it by hand.
+
 ## Measuring it
 
 ```bash
-swift run ijcheck    # 180 checks, deterministic, no key
+swift run ijcheck    # 194 checks, deterministic, no key
 swift run ijeval     # score the pipeline against a known-truth corpus
 ```
 
@@ -45,7 +71,8 @@ control.
 | facts preserved | 100% | 100% | 100% |
 | entities found | 100% | 100% | 100% |
 | scenery kept out | yes | yes | yes |
-| category purity | 94% | 94% | 91% |
+| category purity | 94% | 94% | 93% |
+| schema coherence | 97% | 97% | 97% |
 | citations valid | 100% | 100% | 100% |
 
 Citation validity is the one held at 100%: a wrong category is a nuisance someone can

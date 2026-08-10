@@ -14,9 +14,45 @@ public struct Distill: Sendable {
     let maxPromptCharacters = 220_000
     let maxOutputTokens = 4_000
 
-    public init(store: Store, provider: any ModelProvider) {
+    /// Whether to feed the library's accumulated vocabulary and examples back into
+    /// the prompt. On by default; off is only useful for measuring what it's worth.
+    let learningEnabled: Bool
+
+    public init(store: Store, provider: any ModelProvider, learningEnabled: Bool = true) {
         self.store = store
         self.provider = provider
+        self.learningEnabled = learningEnabled
+    }
+
+    /// Which category's lessons apply, guessed before the document is understood.
+    ///
+    /// A cheap keyword match, not a decision: getting it wrong costs a slightly less
+    /// relevant example, and the graph reassigns the category properly afterwards.
+    static func likelyCategory(of document: Document, markdown: String,
+                               among categories: [String]) -> String? {
+        let haystack = (document.name + " " + markdown.prefix(3_000)).lowercased()
+        return categories
+            .map { category -> (String, Int) in
+                // Categories are named in the plural — "Invoices", "Policies" — while
+                // the documents in them are singular. Matching only the exact word
+                // means a category almost never recognizes its own members.
+                let hits = Self.forms(of: category)
+                    .map { haystack.components(separatedBy: $0).count - 1 }
+                    .max() ?? 0
+                return (category, hits)
+            }
+            .filter { $0.1 > 0 }
+            .max { $0.1 < $1.1 }?.0
+    }
+
+    /// A category name and the singular it was probably made from.
+    static func forms(of category: String) -> [String] {
+        let lower = category.lowercased()
+        var forms = [lower]
+        if lower.hasSuffix("ies") { forms.append(lower.dropLast(3) + "y") }
+        else if lower.hasSuffix("es"), lower.count > 4 { forms.append(String(lower.dropLast(2))) }
+        if lower.hasSuffix("s"), lower.count > 3 { forms.append(String(lower.dropLast())) }
+        return forms
     }
 
     public struct Result: Sendable {
@@ -43,11 +79,20 @@ public struct Distill: Sendable {
 
         let elements = try store.elements(of: documentID)
         let byTag = Dictionary(elements.map { ($0.tag, $0) }, uniquingKeysWith: { first, _ in first })
+        // Everything the library has learned that bears on this document. The
+        // category can only be guessed before extraction, so the guess comes from the
+        // document's own name and text — good enough to fetch the right vocabulary.
         let categories = try store.categoryNames()
+        let likely = Self.likelyCategory(of: document, markdown: markdown, among: categories)
+        let learned = Prompt.Learned(
+            categories: categories,
+            fieldNames: learningEnabled ? try store.fieldVocabulary(for: likely) : [],
+            exemplar: learningEnabled ? try store.exemplar(for: likely) : nil
+        )
 
         let prompt = String(markdown.prefix(maxPromptCharacters))
         let data = try await provider.extract(
-            system: Prompt.system(categories: categories),
+            system: Prompt.system(learned),
             user: Prompt.user(name: document.name, markdown: prompt),
             schema: Prompt.schema,
             maxTokens: maxOutputTokens

@@ -48,10 +48,22 @@ struct Simulator: ModelProvider {
             }
         }
 
+        // In-context learning, modelled honestly. Told which name a category already
+        // uses for a fact, a model reuses it; left to itself it picks a plausible
+        // synonym that differs from document to document. That drift is the thing the
+        // learned vocabulary exists to stop, so the simulator has to exhibit it.
+        let suggested = Self.suggestedNames(in: system)
         var fields: [[String: Any]] = truth.facts.enumerated().map { index, fact in
-            // Sometimes cite an anchor that isn't on this document.
             let cited = (roll() < noise * 0.3) ? "e9999" : (anchors.indices.contains(index) ? anchors[index] : anchor)
-            return ["name": "fact_\(index)", "value": fact, "source": cited]
+            let variants = Corpus.synonyms[fact.concept] ?? [fact.concept]
+            let name: String
+            if let honoured = variants.first(where: { suggested.contains($0) }) {
+                name = honoured
+            } else {
+                // No guidance: settle on a variant chosen by this document alone.
+                name = variants[Int(seed % UInt64(variants.count))]
+            }
+            return ["name": name, "value": fact.value, "source": cited]
         }
         fields.append(["name": "source_file", "value": truth.file, "source": anchor])
 
@@ -73,6 +85,20 @@ struct Simulator: ModelProvider {
             payload["dates"] = [["kind": "mentioned", "date": date, "source": anchor]]
         }
         return try JSONSerialization.data(withJSONObject: payload)
+    }
+
+    /// Field names the prompt offered, pulled back out of the text the way a model
+    /// would attend to them.
+    static let marker = "KNOWN FIELD NAMES:"
+
+    static func suggestedNames(in system: String) -> Set<String> {
+        guard let line = system.components(separatedBy: "\n")
+            .first(where: { $0.contains(marker) }),
+              let range = line.range(of: marker) else { return [] }
+        return Set(line[range.upperBound...]
+            .components(separatedBy: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty })
     }
 
     /// The prompt carries the filename, which is how a document is identified here.
