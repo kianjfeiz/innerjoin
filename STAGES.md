@@ -1,6 +1,17 @@
 # innerjoin — pipeline stages, build specification
 
-_v1 draft · 2026-08-07. This is the **build spec**: contracts, algorithms, failure handling, order of work._
+_v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure handling, order of work._
+
+> **Status: stages 0–2 are built and passing** — see [core/](core/) and its [README](core/README.md).
+> Run `swift run ijparse add <path>` and `swift run ijcheck`. Stage 3 is next and is the first that needs a model.
+>
+> Decisions taken during the build, superseding the proposals below:
+> - **One document is one record.** The multi-record/ledger split is dropped; line items live inside a record's fields. Simpler schema, no orphan concepts.
+> - **Markdown lives on the document row**, not its own table.
+> - **Migrations are incremental** — v1 covers only `document`, `element`, and FTS. Later stages add their own tables rather than shipping empty ones.
+> - **`DatabasePool`, not `DatabaseQueue`** — the UI must read while ingestion writes.
+> - **Checks run as an executable** (`ijcheck`), because swift-testing and XCTest both need a full Xcode install to link. Revisit when Xcode is installed for the app.
+> - **Vision's `RecognizeDocumentsRequest` handles table structure natively**, so no table-recognition work is needed.
 _Companion doc [PIPELINE.md](PIPELINE.md) holds the **research and rationale** — how Unstructured works, what we copy, why SQL over vectors._
 _Points marked **⟨DECIDE⟩** need your call before or during implementation._
 
