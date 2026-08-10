@@ -555,12 +555,30 @@ struct Key: AsyncParsableCommand {
         subcommands: [Set.self, Forget.self])
 
     struct Set: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Save a key for a provider.")
+        static let configuration = CommandConfiguration(
+            abstract: "Save a key for a provider. Reads it from stdin so it stays out of your shell history.")
+
         @Argument(help: "anthropic | openai") var provider: String
-        @Argument(help: "The key.") var key: String
+        @Argument(help: "The key. Omit it — safer — and paste when prompted.") var key: String?
+
         mutating func run() async throws {
-            print(Keychain.write(key, account: provider.lowercased())
-                  ? "Saved. innerjoin will use it automatically."
+            // A key passed as an argument is written to shell history and shows up in
+            // `ps` output for as long as the process lives. Reading it from stdin keeps
+            // it out of both. The argument stays supported for scripts, which have
+            // their own reasons.
+            let secret: String?
+            if let key {
+                secret = key
+            } else {
+                FileHandle.standardError.write(Data("Paste the key, then press return: ".utf8))
+                secret = readLine(strippingNewline: true)
+            }
+            guard let trimmed = secret?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty else {
+                throw ValidationError("No key given.")
+            }
+            print(Keychain.write(trimmed, account: provider.lowercased())
+                  ? "Saved to the login keychain. It never touches the database or the vault."
                   : "Couldn't save to the keychain.")
         }
     }

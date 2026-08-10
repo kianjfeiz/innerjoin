@@ -16,7 +16,7 @@ swift run ijcheck                          # run the checks
 With a model connected, files become records:
 
 ```bash
-swift run ijparse key set anthropic sk-...  # stored in the keychain
+swift run ijparse key set anthropic         # paste when prompted — never in your history
 swift run ijparse understand                # everything not yet understood
 swift run ijparse record 1                  # fields, dates, links, with pages
 swift run ijparse upcoming                  # dates read out of your documents
