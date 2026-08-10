@@ -46,6 +46,11 @@ public struct EntityGate {
         // A role isn't a party. "Tenant" appears in every lease and identifies nobody.
         if Self.roleWords.contains(normalized) { return .reject("generic role") }
 
+        // Nor is the vocabulary of paperwork. Statement lines read like names —
+        // "Deposit", "Refund", "Balance" — and each one admitted is a node that
+        // means nothing and links documents that have nothing to do with each other.
+        if Self.paperworkWords.contains(normalized) { return .reject("paperwork term") }
+
         // Roles are productive in English — policyholder, accountholder, co-signer —
         // so a list alone will always be a step behind. A single word built from a
         // role suffix is a role, not a name.
@@ -114,6 +119,17 @@ public struct EntityGate {
     /// English builds role nouns from a handful of endings; matching the ending keeps
     /// this from having to enumerate every one.
     static let roleSuffixes: [String] = ["holder", "payer", "payee", "signer", "writer"]
+
+    /// The words paperwork is made of. They turn up capitalised at the start of a
+    /// statement line, which is exactly what a name looks like from the outside.
+    static let paperworkWords: Set<String> = [
+        "deposit", "withdrawal", "payment", "transfer", "refund", "credit", "debit",
+        "balance", "invoice", "receipt", "statement", "total", "subtotal", "tax",
+        "fee", "charge", "adjustment", "interest", "premium", "copay", "deductible",
+        "rent", "utility", "utilities", "supplies", "service", "services",
+        "description", "amount", "date", "quantity", "price", "notice", "terms",
+        "agreement", "contract", "policy", "account", "reference", "summary",
+    ]
 
     /// Regions coarse enough that nearly every document mentions one. Admitted only
     /// when the name also carries a number, which is what makes a street address.

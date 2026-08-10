@@ -52,7 +52,28 @@ enum Corpus {
         // ---- Odds and ends that shouldn't cluster ----
         expected.append(try shoppingList(folder))
         expected.append(try recipe(folder))
+
+        // ---- Shapes that break naive parsers ----
+        expected.append(try formStyle(folder))
+        expected.append(try bankStatement(folder))
+        expected.append(try longContract(folder))
+        expected.append(try germanNotice(folder))
+        expected.append(try spreadsheet(folder))
+        expected.append(try deck(folder))
         return expected
+    }
+
+    /// Files that must fail, and fail *visibly* rather than vanishing or crashing.
+    /// Kept apart from the scored corpus because their success is failure.
+    static func buildFailures(in folder: URL) throws -> [String] {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data().write(to: folder.appendingPathComponent("empty.txt"))
+        try Data("%PDF-1.4\nthis is not really a pdf".utf8)
+            .write(to: folder.appendingPathComponent("truncated.pdf"))
+        var broken = ZipWriter()
+        broken.add("xl/worksheets/sheet1.xml", "<not-a-worksheet/>")
+        try broken.write(to: folder.appendingPathComponent("hollow.xlsx"))
+        return ["empty.txt", "truncated.pdf", "hollow.xlsx"]
     }
 
     // MARK: - Drawing helpers
@@ -96,9 +117,25 @@ enum Corpus {
         var box = CGRect(origin: .zero, size: size)
         let data = NSMutableData()
         let ctx = CGContext(consumer: CGDataConsumer(data: data)!, mediaBox: &box, nil)!
-        ctx.beginPDFPage(nil)
-        drawInto(ctx, scale: 1)
-        ctx.endPDFPage()
+
+        // Break onto a new page rather than drawing past the bottom edge, where the
+        // content would simply disappear and the corpus would be quietly wrong.
+        var remaining = lines[...]
+        repeat {
+            ctx.beginPDFPage(nil)
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+            var y: CGFloat = 90
+            while let next = remaining.first, y < size.height - 60 {
+                remaining = remaining.dropFirst()
+                if next.0.isEmpty { y += next.1; continue }
+                NSAttributedString(string: next.0, attributes: [
+                    .font: font(next.1, next.2), .foregroundColor: NSColor.black
+                ]).draw(at: NSPoint(x: 64, y: size.height - y))
+                y += next.1 * 2.0
+            }
+            NSGraphicsContext.current = nil
+            ctx.endPDFPage()
+        } while !remaining.isEmpty
         ctx.closePDF()
         data.write(to: url, atomically: true)
     }
@@ -303,6 +340,119 @@ enum Corpus {
         """, to: folder.appendingPathComponent("shopping.md"))
         return Expected(file: "shopping.md", area: "Everything else",
                         entities: [], facts: ["coffee beans"], scenery: [])
+    }
+
+    // MARK: - Awkward shapes
+
+    /// Label-and-value pairs in columns. Read naively the labels and values interleave
+    /// and every value ends up attached to the wrong field.
+    private static func formStyle(_ folder: URL) throws -> Expected {
+        try pdf(folder.appendingPathComponent("registration_form.pdf"), lines: [
+            ("VEHICLE REGISTRATION", 18, true), ("", 8, false),
+            ("Owner                    Vahid Feiz", 11, false),
+            ("Plate                    7XKD449", 11, false),
+            ("Expires                  2027-08-31", 11, false),
+            ("Fee paid                 $214.00", 11, false),
+            ("Insurer                  State Farm", 11, false),
+        ], scanned: false)
+        return Expected(file: "registration_form.pdf", area: "Everything else",
+                        entities: ["State Farm"],
+                        facts: ["7XKD449", "2027-08-31", "$214.00"], scenery: ["Owner"])
+    }
+
+    /// Many rows of numbers — the shape most likely to be flattened into a soup of
+    /// digits, and the one where that damage is hardest to spot afterwards.
+    private static func bankStatement(_ folder: URL) throws -> Expected {
+        var lines: [(String, CGFloat, Bool)] = [
+            ("FIRST HARBOUR BANK", 18, true), ("", 6, false),
+            ("Statement period 2026-06-01 to 2026-06-30.", 11, false), ("", 6, false),
+            ("Date          Description                  Amount", 11, true),
+        ]
+        let rows = [("2026-06-02", "Alcon Laboratories", "-390.00"),
+                    ("2026-06-05", "Pacific Gas and Electric", "-97.12"),
+                    ("2026-06-09", "Chen Clinic", "-45.00"),
+                    ("2026-06-15", "Deposit", "+2,400.00"),
+                    ("2026-06-28", "M. Osei rent", "-3,200.00")]
+        for row in rows {
+            lines.append(("\(row.0)    \(row.1.padding(toLength: 28, withPad: " ", startingAt: 0))\(row.2)", 11, false))
+        }
+        lines.append(("", 6, false))
+        lines.append(("Closing balance $1,284.55.", 12, true))
+        try pdf(folder.appendingPathComponent("bank_statement_june.pdf"), lines: lines, scanned: false)
+        return Expected(file: "bank_statement_june.pdf", area: "Everything else",
+                        entities: ["First Harbour Bank"],
+                        facts: ["$1,284.55", "2026-06-30"], scenery: ["Deposit"])
+    }
+
+    /// Long enough to span pages, so pagination and the token budget both get exercised.
+    private static func longContract(_ folder: URL) throws -> Expected {
+        var lines: [(String, CGFloat, Bool)] = [("SERVICE AGREEMENT", 20, true), ("", 8, false)]
+        for section in 1...26 {
+            lines.append(("\(section). Clause \(section)", 13, true))
+            lines.append(("Eye Care of East Bay engages Alcon Laboratories for supply of", 11, false))
+            lines.append(("consumables under the terms set out in this section.", 11, false))
+            lines.append(("", 6, false))
+        }
+        lines.append(("This agreement terminates 2028-01-31 unless renewed.", 11, false))
+        try pdf(folder.appendingPathComponent("service_agreement.pdf"), lines: lines, scanned: false)
+        return Expected(file: "service_agreement.pdf", area: "Supplies",
+                        entities: ["Alcon Laboratories", "Eye Care of East Bay"],
+                        facts: ["2028-01-31"], scenery: [])
+    }
+
+    /// Not English. Accented characters must survive normalization, and the language
+    /// must not stop the document being read at all.
+    private static func germanNotice(_ folder: URL) throws -> Expected {
+        try write("""
+        # Mietanpassung
+
+        Sehr geehrter Herr Feiz,
+
+        die monatliche Miete für 1247 Fillmore St beträgt ab 2027-04-01
+        3.400,00 EUR. Änderungen bestätigt durch M. Osei.
+        """, to: folder.appendingPathComponent("mietanpassung.md"))
+        return Expected(file: "mietanpassung.md", area: "Apartment",
+                        entities: ["M. Osei", "1247 Fillmore St"],
+                        facts: ["3.400,00 EUR", "2027-04-01"], scenery: [])
+    }
+
+    private static func spreadsheet(_ folder: URL) throws -> Expected {
+        let strings = ["Vendor", "Spend", "Alcon Laboratories", "Chen Clinic", "Skyline Air"]
+        let shared = #"<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#
+            + strings.map { "<si><t>\($0)</t></si>" }.joined() + "</sst>"
+        let rows = """
+        <row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>
+        <row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>1447.50</v></c></row>
+        <row r="3"><c r="A3" t="s"><v>3</v></c><c r="B3"><v>173.50</v></c></row>
+        <row r="4"><c r="A4" t="s"><v>4</v></c><c r="B4"><v>412.60</v></c></row>
+        """
+        var archive = ZipWriter()
+        archive.add("[Content_Types].xml", #"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#)
+        archive.add("xl/sharedStrings.xml", shared)
+        archive.add("xl/worksheets/sheet1.xml",
+                    #"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>"#
+                    + rows + "</sheetData></worksheet>")
+        try archive.write(to: folder.appendingPathComponent("annual_spend.xlsx"))
+        return Expected(file: "annual_spend.xlsx", area: "Supplies",
+                        entities: ["Alcon Laboratories"],
+                        facts: ["1447.50", "Chen Clinic"], scenery: [])
+    }
+
+    private static func deck(_ folder: URL) throws -> Expected {
+        func slide(_ title: String, _ bullets: [String]) -> String {
+            let paragraphs = ([title] + bullets)
+                .map { "<a:p><a:r><a:t>\($0)</a:t></a:r></a:p>" }.joined()
+            return #"<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody>"#
+                + paragraphs + "</p:txBody></p:sp></p:spTree></p:cSld></p:sld>"
+        }
+        var archive = ZipWriter()
+        archive.add("[Content_Types].xml", #"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>"#)
+        archive.add("ppt/slides/slide1.xml", slide("Supplier review", ["Prepared for Eye Care of East Bay"]))
+        archive.add("ppt/slides/slide2.xml", slide("Spend", ["Alcon Laboratories $1,447.50"]))
+        try archive.write(to: folder.appendingPathComponent("supplier_review.pptx"))
+        return Expected(file: "supplier_review.pptx", area: "Supplies",
+                        entities: ["Alcon Laboratories", "Eye Care of East Bay"],
+                        facts: ["$1,447.50"], scenery: [])
     }
 
     private static func recipe(_ folder: URL) throws -> Expected {

@@ -33,6 +33,21 @@ public struct Organize: Sendable {
     static let hubMinimumRecords = 5
     static let hubMinimumReach = 3
 
+    /// How many *distinct* entities must tie a record to a group before it joins.
+    ///
+    /// Held at 1 deliberately, after measuring both. Requiring two makes categories
+    /// perfectly pure but strands a third of the library in "Everything else" — a
+    /// utility bill shares only the address with the lease, and belongs with it. A
+    /// sidebar where the biggest category is "Everything else" is the worse failure,
+    /// so the occasional stray (a car registration pulled toward the health policies
+    /// because both name the same insurer) is the better trade.
+    ///
+    /// The counting is by distinct entity rather than summed edge weight, which is
+    /// what makes raising this meaningful at all: summing counts one shared name once
+    /// per member of the group, so a single tie to a group of three already looks
+    /// like three.
+    static let minimumAttachment = 1
+
     public static let holdingCategory = "Everything else"
 
     public init(store: Store) { self.store = store }
@@ -50,8 +65,10 @@ public struct Organize: Sendable {
             return Outcome(categories: [], holding: records.count, ignoredHubs: [])
         }
 
-        let (adjacency, hubs) = try neighbours(of: records)
-        let communities = Self.propagateLabels(over: adjacency, records: records.compactMap(\.id))
+        let (adjacency, entitiesByRecord, hubs) = try neighbours(of: records)
+        let communities = Self.propagateLabels(over: adjacency,
+                                               records: records.compactMap(\.id),
+                                               entities: entitiesByRecord)
 
         // Group by community, then decide which are substantial enough to name.
         var members: [Int64: [Record]] = [:]
@@ -97,9 +114,12 @@ public struct Organize: Sendable {
 
     /// Two records are neighbours when they're about the same entity, weighted by how
     /// many they share. Hub entities are left out entirely.
-    func neighbours(of records: [Record]) throws -> (adjacency: [Int64: [Int64: Int]], hubs: [String]) {
+    func neighbours(of records: [Record]) throws
+        -> (adjacency: [Int64: [Int64: Int]], entities: [Int64: Set<Int64>], hubs: [String])
+    {
         let total = records.count
         var adjacency: [Int64: [Int64: Int]] = [:]
+        var entitiesByRecord: [Int64: Set<Int64>] = [:]
         var hubs: [String] = []
 
         try store.dbQueue.read { db in
@@ -126,13 +146,14 @@ public struct Organize: Sendable {
                     """, arguments: ["entity:\(entityID)"])
 
                 for a in attached {
+                    entitiesByRecord[a, default: []].insert(entityID)
                     for b in attached where a != b {
                         adjacency[a, default: [:]][b, default: 0] += 1
                     }
                 }
             }
         }
-        return (adjacency, hubs)
+        return (adjacency, entitiesByRecord, hubs)
     }
 
     /// Label propagation: each record repeatedly adopts the label most common among
@@ -141,7 +162,8 @@ public struct Organize: Sendable {
     ///
     /// Ties break on the lowest id so the result is identical run to run — a category
     /// list that reshuffles for no reason would be worse than a slightly worse one.
-    static func propagateLabels(over adjacency: [Int64: [Int64: Int]], records: [Int64]) -> [Int64: Int] {
+    static func propagateLabels(over adjacency: [Int64: [Int64: Int]], records: [Int64],
+                                entities: [Int64: Set<Int64>] = [:]) -> [Int64: Int] {
         var labels: [Int64: Int] = [:]
         for (index, id) in records.sorted().enumerated() { labels[id] = index }
 
@@ -150,12 +172,25 @@ public struct Organize: Sendable {
             for id in records.sorted() {
                 guard let neighbours = adjacency[id], !neighbours.isEmpty else { continue }
                 var weights: [Int: Int] = [:]
+                // Which *distinct* entities tie this record to each group. Summing edge
+                // weights instead would count one shared name three times just because
+                // the group has three members.
+                var bridging: [Int: Set<Int64>] = [:]
+                let mine = entities[id] ?? []
+
                 for (neighbour, weight) in neighbours {
                     guard let label = labels[neighbour] else { continue }
                     weights[label, default: 0] += weight
+                    bridging[label, default: []].formUnion(mine.intersection(entities[neighbour] ?? []))
                 }
                 guard let best = weights.max(by: { ($0.value, -$0.key) < ($1.value, -$1.key) })?.key
                 else { continue }
+
+                // One shared name is a coincidence, not a category. A car registration
+                // and a health policy both naming the same insurer belong to different
+                // parts of a life; joining on that single tie is how unrelated documents
+                // get swept into a category and quietly make it untrustworthy.
+                if !entities.isEmpty, (bridging[best]?.count ?? 0) < minimumAttachment { continue }
                 if labels[id] != best { labels[id] = best; changed = true }
             }
             if !changed { break }

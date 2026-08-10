@@ -29,6 +29,7 @@ struct Eval {
         defer { try? FileManager.default.removeItem(at: root) }
 
         let truth = try Corpus.build(in: corpusFolder)
+        let failures = try Corpus.buildFailures(in: corpusFolder.appendingPathComponent("broken"))
         let byFile = Dictionary(uniqueKeysWithValues: truth.map { ($0.file, $0) })
         let store = try Store(root: root.appendingPathComponent("workspace"))
 
@@ -39,7 +40,16 @@ struct Eval {
         )
         _ = try await librarian.absorb([corpusFolder])
 
-        return try score(store: store, truth: truth, noise: noise)
+        var report = try score(store: store, truth: truth, noise: noise)
+        report.brokenFilesExpected = failures.count
+        let all = try store.recentDocuments(limit: 500)
+        report.brokenFilesHandled = failures.filter { name in
+            // Either refused outright, or kept with a readable reason. Both are fine;
+            // a broken file silently succeeding is not.
+            guard let doc = all.first(where: { $0.name == name }) else { return true }
+            return doc.status == .failed && (doc.problem?.isEmpty == false)
+        }.count
+        return report
     }
 
     // MARK: - Scoring
@@ -151,6 +161,7 @@ struct Report {
     var admittedScenery: [String] = []
     var impureCategories: [String] = []
     var entityNames: [String] = []
+    var brokenFilesExpected = 0, brokenFilesHandled = 0
 
     var readRate: Double { ratio(filesRead, filesExpected) }
     var factRate: Double { ratio(factsFound, factsExpected) }
@@ -166,6 +177,7 @@ struct Report {
     var passed: Bool {
         readRate >= 0.95 && factRate >= 0.90 && citationValidity >= 0.999
             && entityRecall >= 0.85 && categoryPurity >= 0.80 && sceneryAdmitted == 0
+            && brokenFilesHandled == brokenFilesExpected
     }
 
     func print() {
@@ -178,6 +190,7 @@ struct Report {
         Swift.print("  category purity     \(percent(categoryPurity))   \(documentsInPureCategory)/\(documentsCategorized) placed")
         Swift.print("  citations valid     \(percent(citationValidity))   \(citationsValid)/\(citationsStored)")
         Swift.print("  singleton entities  \(percent(singletonShare))")
+        Swift.print("  broken files        \(brokenFilesHandled == brokenFilesExpected ? " ok" : " NO")   \(brokenFilesHandled)/\(brokenFilesExpected) failed visibly")
         Swift.print("  categories: " + (categories.isEmpty ? "none"
             : categories.map { "\($0.0) \($0.1)" }.joined(separator: " · ")))
         for line in missedFacts.prefix(6)      { Swift.print("    missed fact:    \(line)") }
