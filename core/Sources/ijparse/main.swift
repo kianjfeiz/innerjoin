@@ -9,7 +9,7 @@ struct IJParse: AsyncParsableCommand {
         abstract: "innerjoin's on-device preprocessor — read files into markdown and elements.",
         subcommands: [Add.self, Show.self, List.self, Find.self,
                       Understand.self, Record.self, Upcoming.self, Who.self,
-                      Graph.self, Tidy.self, Sort.self, Settle.self, Key.self],
+                      Graph.self, Tidy.self, Sort.self, Settle.self, Name.self, Key.self],
         defaultSubcommand: Add.self
     )
 }
@@ -126,7 +126,9 @@ struct List: AsyncParsableCommand {
             let id = String(document.id ?? 0).padding(toLength: 5, withPad: " ", startingAt: 0)
             let mark = document.status == .failed ? "!" : (document.status == .partial ? "~" : " ")
             let pages = document.pageCount.map { "\($0)p" } ?? "—"
-            print("\(id)\(mark) \(document.name.padded(48)) \(pages.padded(5)) \(document.stage.rawValue)")
+            // The label, not the arrival name: once a document is understood it's listed
+            // as what it is. `ijparse name` shows both.
+            print("\(id)\(mark) \(document.label.padded(48)) \(pages.padded(5)) \(document.stage.rawValue)")
         }
         print("\n\(counts.documents) documents · \(counts.elements) parts")
     }
@@ -220,6 +222,9 @@ struct Understand: AsyncParsableCommand {
                     notes.append("\(result.refusedEntities.count) entities refused")
                 }
                 print("  understood  \(name.padded(34)) \(result.record.title.padded(40)) \(notes.joined(separator: " · "))")
+                if let renamed = result.name, renamed != name {
+                    print("                now called: \(renamed)")
+                }
                 if verbose {
                     for refusal in result.refusedEntities { print("                refused: \(refusal)") }
                 }
@@ -492,6 +497,53 @@ struct Graph: AsyncParsableCommand {
                 print("  \(relation.name.padded(18)) \(relation.count)")
             }
         }
+    }
+}
+
+// MARK: - name
+
+struct Name: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Names documents after what's in them. Originals are never touched.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Flag(help: "Re-derive every name, rather than just showing them.") var refresh = false
+    @Option(name: .customLong("export"), help: "Copy the library into a folder under its derived names.")
+    var export: String?
+
+    mutating func run() async throws {
+        let store = try workspace.open()
+        let namer = Namer(store: store)
+
+        if refresh {
+            let changed = try await namer.nameAll()
+            print("\(changed) name\(changed == 1 ? "" : "s") changed\n")
+        }
+
+        if let export {
+            let folder = URL(fileURLWithPath: (export as NSString).expandingTildeInPath)
+            let written = try namer.export(to: folder)
+            for file in written { print("  \(file.from.padded(40)) → \(file.to)") }
+            print("\n\(written.count) file\(written.count == 1 ? "" : "s") copied to \(folder.path)")
+            return
+        }
+
+        let documents = try store.allDocuments()
+        guard !documents.isEmpty else {
+            print("Nothing here yet. Add files with: ijparse add <path>")
+            return
+        }
+        for document in documents {
+            let id = String(document.id ?? 0).padded(5)
+            guard document.wasRenamed else {
+                let why = document.stage == .understood ? "nothing better to call it" : "not understood yet"
+                print("\(id) \(document.name.padded(46)) · \(why)")
+                continue
+            }
+            print("\(id) \(document.name.padded(46)) → \(document.label)")
+        }
+        let renamed = documents.filter(\.wasRenamed).count
+        print("\n\(renamed) of \(documents.count) named from their contents")
     }
 }
 

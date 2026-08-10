@@ -23,8 +23,31 @@ swift run ijparse upcoming                  # dates read out of your documents
 swift run ijparse who "Osei"                # every file mentioning someone
 swift run ijparse tidy                      # merge duplicates, flag disagreements
 swift run ijparse sort                      # re-derive categories from the graph
+swift run ijparse name                      # what each file is now called, and why
 swift run ijparse graph                     # is the graph healthy or bloating?
 ```
+
+## Names
+
+A file arrives called `scan_0001.pdf` or `Kian Feiz - ES COE Fall 2026.pdf`. Once it's
+understood, the record already holds everything a filing clerk would have written on
+the folder, so the library relabels it:
+
+```
+26-27 STEPS-BEFORE-ARRIVING-UC3M-EPS.pdf   →  Steps before arriving UC3M.pdf
+inv_0042.pdf                               →  2026-03-01 Invoice — Alcon Supply.pdf
+```
+
+Shape is `date · subject · other party`, each part dropped when it's missing or already
+said. No model call — it's a pure function of the record, so it's free and gives the
+same answer twice. Three rules it holds to:
+
+- **The arrival name is kept.** It's provenance; someone will look for the file by the
+  name they gave it. `ijparse name` shows both.
+- **Nothing on disk moves.** The original is the user's and the vault copy is addressed
+  by content. `ijparse name --export <folder>` writes *copies* under the new names.
+- **Nothing is invented.** No date unless the document states one; no name at all when
+  extraction had nothing to say, in which case the file keeps what it arrived with.
 
 ## How the library learns from itself
 
@@ -55,7 +78,7 @@ that disagree, so it's a small fraction of extra calls. `ijparse settle` runs it
 ## Measuring it
 
 ```bash
-swift run ijcheck    # 202 checks, deterministic, no key
+swift run ijcheck    # 242 checks, deterministic, no key
 swift run ijeval     # score the pipeline against a known-truth corpus
 ```
 
@@ -74,6 +97,7 @@ control.
 | category purity | 94% | 94% | 93% |
 | schema coherence | 97% | 97% | 97% |
 | citations valid | 100% | 100% | 100% |
+| named from contents | 100% | 100% | 100% |
 
 Citation validity is the one held at 100%: a wrong category is a nuisance someone can
 see and fix, but a citation that opens nothing is the app lying about where a fact
@@ -97,11 +121,17 @@ Workspaces live at `~/Library/Application Support/innerjoin/Personal` by default
 | 1 · partition | file → typed elements in reading order, with coordinates | PDFKit, Vision, Speech, AppKit | no |
 | 2 · rendition | elements → one markdown document with `[eN]` anchors | — | no |
 | 3 · distill | markdown → a record, its entities, and its dates | the user's model | **yes** |
+| 3b · name | record → a filename that says what the document is | — | no |
+| 4 · consolidate | merge duplicate entities, flag records that disagree | NaturalLanguage | no |
+| 5 · index | FTS5 over both the text and what was understood | SQLite | no |
+| 6 · organize | categories from graph clusters, named by extraction's own votes | — | no |
+| refine | re-read the documents that describe things unlike their peers | the user's model | **yes** |
 
 Stages 0–2 never touch the network, so innerjoin is a searchable library before any
-model is connected; understanding backfills later. Stages 4–6 (fuzzy entity
-resolution, embeddings, categories from graph clusters) are still to come — see
-[../STAGES.md](../STAGES.md).
+model is connected; understanding backfills later. Everything after Stage 3 is
+arithmetic and SQL over what's already stored — see [../STAGES.md](../STAGES.md).
+Embeddings (5b) are deliberately not built: they're gated on a query that demonstrably
+fails full-text search.
 
 ## Models
 
@@ -243,3 +273,4 @@ Measured, not guessed — each of these was found by running adversarial documen
 | No reader yet | `.msg`, video. |
 | Audio needs a language model | Downloaded on first use; offline afterwards. |
 | Entity resolution is exact-match only | "Alcon" and "Alcon Labs" stay separate until Stage 4 adds fuzzy matching. |
+| A derived name carries day precision even when the document gave only a year | `Dates.parse` turns "2026" into 1 January, so a name could claim a day the document never stated. In practice documents that give only a year are undated things — handbooks, résumés — where extraction leaves the date empty anyway. |

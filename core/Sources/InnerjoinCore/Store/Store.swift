@@ -144,6 +144,15 @@ public final class Store: Sendable {
             }
         }
 
+        // v4 — a name that says what the document is, kept beside the one it arrived
+        // with rather than replacing it. Nullable, so every existing library gets the
+        // column without a rewrite and fills it in the next time it understands.
+        m.registerMigration("v4_display_name") { db in
+            try db.alter(table: "document") { t in
+                t.add(column: "displayName", .text)
+            }
+        }
+
         return m
     }
 
@@ -157,6 +166,23 @@ public final class Store: Sendable {
 
     public func document(id: Int64) throws -> Document? {
         try dbQueue.read { db in try Document.fetchOne(db, key: id) }
+    }
+
+    /// Every document, oldest first. Used by the passes that look at the whole library.
+    public func allDocuments() throws -> [Document] {
+        try dbQueue.read { db in
+            try Document.order(Document.Columns.id).fetchAll(db)
+        }
+    }
+
+    /// Derived names already in use, so a second document with the same subject gets
+    /// numbered rather than quietly showing the same name twice.
+    public func displayNames(excluding documentID: Int64? = nil) throws -> Set<String> {
+        try dbQueue.read { db in
+            var request = Document.filter(Column("displayName") != nil)
+            if let documentID { request = request.filter(Document.Columns.id != documentID) }
+            return Set(try request.fetchAll(db).compactMap(\.displayName))
+        }
     }
 
     public func recentDocuments(limit: Int = 50) throws -> [Document] {
@@ -299,6 +325,27 @@ public final class Store: Sendable {
                 .fetchAll(db)
                 .filter { !$0.fields.isEmpty }
                 .max { $0.fields.count < $1.fields.count }
+        }
+    }
+
+    /// Who a record is with, and how. One query rather than a link fetch followed by an
+    /// entity fetch each — this runs for every document that gets named.
+    public func parties(ofRecord recordID: Int64) throws -> [Naming.Party] {
+        try dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT entity.name AS name, entity.kind AS kind,
+                       link.rel AS rel, link.confidence AS confidence
+                FROM link JOIN entity ON link.dst = 'entity:' || entity.id
+                WHERE link.src = ?
+                """, arguments: ["record:\(recordID)"])
+            .map { row in
+                Naming.Party(
+                    name: row["name"] as String? ?? "",
+                    kind: Entity.Kind(rawValue: row["kind"] as String? ?? "") ?? .other,
+                    relation: row["rel"] as String? ?? "mentions",
+                    confidence: row["confidence"] as Double? ?? 1
+                )
+            }
         }
     }
 

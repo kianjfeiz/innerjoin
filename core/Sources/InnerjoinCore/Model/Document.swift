@@ -9,8 +9,13 @@ public struct Document: Codable, Identifiable, Equatable, Sendable {
 
     /// Path inside the vault, relative to the vault root. The user's original is never touched.
     public var vaultPath: String
-    /// The name the file arrived with, shown in the UI.
+    /// The name the file arrived with. Never overwritten — it's provenance, and someone
+    /// will eventually go looking for the file by the name they gave it.
     public var name: String
+    /// A name derived from what the document turned out to be, once it's understood:
+    /// "2026-06-15 Travel insurance certificate — ACE.pdf". Nil until there's a record,
+    /// or when nothing better than the arrival name could be built.
+    public var displayName: String?
     /// Content hash. Dedupe key — re-adding the same bytes is a no-op.
     public var sha256: String
     /// Uniform type identifier, e.g. "com.adobe.pdf".
@@ -34,6 +39,7 @@ public struct Document: Codable, Identifiable, Equatable, Sendable {
         id: Int64? = nil,
         vaultPath: String,
         name: String,
+        displayName: String? = nil,
         sha256: String,
         typeIdentifier: String,
         byteSize: Int64,
@@ -48,6 +54,7 @@ public struct Document: Codable, Identifiable, Equatable, Sendable {
         self.id = id
         self.vaultPath = vaultPath
         self.name = name
+        self.displayName = displayName
         self.sha256 = sha256
         self.typeIdentifier = typeIdentifier
         self.byteSize = byteSize
@@ -75,6 +82,14 @@ public struct Document: Codable, Identifiable, Equatable, Sendable {
     }
 
     public var type: UTType? { UTType(typeIdentifier) }
+
+    /// What to show. The derived name when there is one, otherwise the name it arrived
+    /// with — so a document is never nameless while it waits to be understood.
+    public var label: String { displayName ?? name }
+
+    /// True when the library is showing a different name than the file arrived with.
+    /// The UI uses this to offer the original, rather than hiding that it changed.
+    public var wasRenamed: Bool { displayName != nil && displayName != name }
 }
 
 extension Document: FetchableRecord, MutablePersistableRecord {

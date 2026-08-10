@@ -2,7 +2,7 @@
 
 _v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure handling, order of work._
 
-> **Status: stages 0–6 are built and passing** (131 checks) — see [core/](core/) and its [README](core/README.md).
+> **Status: stages 0–6 are built and passing** (242 checks) — see [core/](core/) and its [README](core/README.md).
 > Only stage 3 needs a model; everything else runs on-device. Stage 5b (embeddings) is
 > deliberately deferred until a real query is shown to fail on full-text search.
 >
@@ -18,6 +18,7 @@ _v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure ha
 > - **Relations are a closed enum**, not an open vocabulary; left open, models invent four spellings of one predicate.
 > - **Category naming needs no extra call** — the per-document guesses from stage 3 are aggregated as votes by the cluster.
 > - **Hub share is 0.6, not 0.4** — a library splits into a few groups, so the entity defining each one legitimately reaches ~50%.
+> - **Documents are renamed from their contents, and only as a label.** Derived in Swift from the record (date · subject · party), never a second model call. The arrival name stays on the row as provenance, and nothing on disk moves — export writes copies. A document the graph couldn't place is *not* named after the holding category; it keeps the name it came with.
 _Companion doc [PIPELINE.md](PIPELINE.md) holds the **research and rationale** — how Unstructured works, what we copy, why SQL over vectors._
 _Points marked **⟨DECIDE⟩** need your call before or during implementation._
 

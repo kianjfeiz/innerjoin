@@ -65,6 +65,8 @@ public struct Distill: Sendable {
         /// Entities the gate turned away, with the reason. Surfaced rather than hidden:
         /// this list is how you tell whether extraction is over-producing.
         public let refusedEntities: [String]
+        /// The name the document now carries, if understanding earned it a better one.
+        public let name: String?
     }
 
     /// Understands one already-rendered document.
@@ -167,9 +169,13 @@ public struct Distill: Sendable {
         // Deadlines innerjoin works out itself — never arithmetic asked of a model.
         try await addDerivedDates(for: record, reply: reply)
 
+        // Now that we know what the document is, it can be called what it is. Pure
+        // string work over the record — no second model call.
+        let name = try await Namer(store: store).name(documentID: documentID)
+
         return Result(record: record, entityCount: resolvedEntities.count,
                       dateCount: dates.count, droppedCitations: dropped,
-                      refusedEntities: refusedEntities)
+                      refusedEntities: refusedEntities, name: name)
     }
 
     struct AdmittedEntity: Sendable {

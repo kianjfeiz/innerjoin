@@ -163,6 +163,11 @@ public actor Librarian {
                 _ = try await Refine(store: store, provider: provider).run()
                 _ = try await Organize(store: store).run()
             }
+            // Names last. Each document was named as it was understood, but merging
+            // duplicate entities can change who a document is with, and lanes running
+            // in parallel can both reach for the same name. This pass is the one that
+            // decides, in document order, so numbering is stable.
+            _ = try await Namer(store: store).nameAll()
         }
 
         return Summary(
@@ -220,6 +225,7 @@ public actor Librarian {
         }
         _ = try await Consolidate(store: store).run()
         _ = try await Organize(store: store).run()
+        _ = try await Namer(store: store).nameAll()
 
         return Summary(read: 0, understood: progress.understood, alreadyPresent: 0,
                        failed: problems.count, problems: problems,

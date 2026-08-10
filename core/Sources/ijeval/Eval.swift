@@ -122,6 +122,17 @@ struct Eval {
         }.sorted()
         report.admittedScenery = unwanted.filter { names.contains($0) }.sorted()
 
+        // --- names: is each document called what it is, and only one thing? ---
+        let understood = documents.filter { $0.stage == .understood }
+        report.documentsUnderstood = understood.count
+        report.documentsNamed = understood.filter(\.wasRenamed).count
+        let derived = understood.compactMap(\.displayName)
+        // Two documents showing the same name is the failure that matters: it makes the
+        // library look like it has duplicates it doesn't have.
+        report.namesUnique = Set(derived.map { $0.lowercased() }).count == derived.count
+        report.nameExamples = understood.filter(\.wasRenamed).prefix(4)
+            .map { "\($0.name)  →  \($0.label)" }
+
         // --- categories: does each cluster hold one real area? ---
         var byCategory: [String: [String]] = [:]
         for document in documents {
@@ -213,6 +224,9 @@ struct Report {
     var brokenFilesExpected = 0, brokenFilesHandled = 0
     var fieldUses = 0, fieldUsesOnDominantName = 0
     var splitConcepts: [String] = []
+    var documentsUnderstood = 0, documentsNamed = 0
+    var namesUnique = true
+    var nameExamples: [String] = []
 
     var readRate: Double { ratio(filesRead, filesExpected) }
     var factRate: Double { ratio(factsFound, factsExpected) }
@@ -221,6 +235,8 @@ struct Report {
     var citationValidity: Double { citationsStored == 0 ? 1 : ratio(citationsValid, citationsStored) }
     /// 1.0 means every category calls each fact by a single name.
     var schemaCoherence: Double { ratio(fieldUsesOnDominantName, fieldUses) }
+    /// Share of understood documents that earned a name from their contents.
+    var namedShare: Double { ratio(documentsNamed, documentsUnderstood) }
 
     private func ratio(_ a: Int, _ b: Int) -> Double { b == 0 ? 1 : Double(a) / Double(b) }
 
@@ -238,6 +254,7 @@ struct Report {
         readRate >= 0.99 && factRate >= 0.98 && citationValidity >= 0.999
             && entityRecall >= 0.95 && categoryPurity >= 0.90 && sceneryAdmitted == 0
             && brokenFilesHandled == brokenFilesExpected && schemaCoherence >= 0.90
+            && namedShare >= 0.90 && namesUnique
     }
 
     func print() {
@@ -250,6 +267,7 @@ struct Report {
         Swift.print("  category purity     \(percent(categoryPurity))   \(documentsInPureCategory)/\(documentsCategorized) placed")
         Swift.print("  citations valid     \(percent(citationValidity))   \(citationsValid)/\(citationsStored)")
         Swift.print("  schema coherence    \(percent(schemaCoherence))   \(fieldUsesOnDominantName)/\(fieldUses) field uses on one name")
+        Swift.print("  named from contents \(percent(namedShare))   \(documentsNamed)/\(documentsUnderstood)\(namesUnique ? "" : "  NAMES COLLIDE")")
         Swift.print("  singleton entities  \(percent(singletonShare))")
         Swift.print("  broken files        \(brokenFilesHandled == brokenFilesExpected ? " ok" : " NO")   \(brokenFilesHandled)/\(brokenFilesExpected) failed visibly")
         Swift.print("  categories: " + (categories.isEmpty ? "none"
@@ -259,6 +277,7 @@ struct Report {
         for line in impureCategories.prefix(6) { Swift.print("    mixed category: \(line)") }
         for line in splitConcepts.prefix(6)    { Swift.print("    split naming:   \(line)") }
         Swift.print("  entities: " + entityNames.joined(separator: " | "))
+        for line in nameExamples { Swift.print("    named:  \(line)") }
         Swift.print("  → \(passed ? "meets thresholds" : "BELOW THRESHOLD")")
     }
 }
