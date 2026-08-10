@@ -2,8 +2,9 @@
 
 _v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure handling, order of work._
 
-> **Status: stages 0–2 are built and passing** — see [core/](core/) and its [README](core/README.md).
-> Run `swift run ijparse add <path>` and `swift run ijcheck`. Stage 3 is next and is the first that needs a model.
+> **Status: stages 0–6 are built and passing** (131 checks) — see [core/](core/) and its [README](core/README.md).
+> Only stage 3 needs a model; everything else runs on-device. Stage 5b (embeddings) is
+> deliberately deferred until a real query is shown to fail on full-text search.
 >
 > Decisions taken during the build, superseding the proposals below:
 > - **One document is one record.** The multi-record/ledger split is dropped; line items live inside a record's fields. Simpler schema, no orphan concepts.
@@ -12,6 +13,11 @@ _v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure ha
 > - **`DatabasePool`, not `DatabaseQueue`** — the UI must read while ingestion writes.
 > - **Checks run as an executable** (`ijcheck`), because swift-testing and XCTest both need a full Xcode install to link. Revisit when Xcode is installed for the app.
 > - **Vision's `RecognizeDocumentsRequest` handles table structure natively**, so no table-recognition work is needed.
+> - **Audio yes, video no** — Speech framework, one element per utterance, timestamps in place of coordinates.
+> - **Entity over-production is gated deterministically** (name must appear in the document, roles and broad places refused, per-document cap, NLTagger corroboration) — see core/README.md.
+> - **Relations are a closed enum**, not an open vocabulary; left open, models invent four spellings of one predicate.
+> - **Category naming needs no extra call** — the per-document guesses from stage 3 are aggregated as votes by the cluster.
+> - **Hub share is 0.6, not 0.4** — a library splits into a few groups, so the entity defining each one legitimately reaches ~50%.
 _Companion doc [PIPELINE.md](PIPELINE.md) holds the **research and rationale** — how Unstructured works, what we copy, why SQL over vectors._
 _Points marked **⟨DECIDE⟩** need your call before or during implementation._
 
