@@ -96,6 +96,14 @@ struct OpenAICompatibleProvider: ModelProvider {
             default:
                 break
             }
+            // A router fans one model out across several upstream providers, and they
+            // don't all honour the same parameters. That is what made truncation
+            // *intermittent*: most runs landed on a provider that turned reasoning off as
+            // asked, and one in four landed on one that ignored it, spent the whole token
+            // budget thinking, and returned an object cut off mid-field. Requiring
+            // parameter support makes the routing match the request instead of the
+            // failure being a lottery.
+            body["provider"] = ["require_parameters": true]
         }
 
         var headers: [String: String] = [:]

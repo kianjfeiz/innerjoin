@@ -15,6 +15,21 @@ struct Eval {
         // The same corpus, the same known truth, a real model instead of the simulator.
         // Every number the simulator produces is a claim about a program I wrote to
         // imitate a model; this is the only way to find out which of those claims hold.
+        // Identity is scored on its own corpus and its own run: the documents exist to
+        // break resolution, not to be read, and mixing them into the main numbers would
+        // hide both.
+        // Against a published benchmark, beside the published algorithm.
+        if let index = arguments.firstIndex(of: "--linkage") {
+            let path = arguments.count > index + 1 ? arguments[index + 1] : "febrl_pairs.tsv"
+            try Linkage.run(pairsAt: path)
+            return
+        }
+
+        if arguments.contains("--people") {
+            try await runPeople()
+            return
+        }
+
         if arguments.contains("--real") {
             try await runAgainstRealModel(settle: !arguments.contains("--no-settle"))
             return
@@ -57,6 +72,43 @@ struct Eval {
 
         print(allPassed ? "\nAll thresholds met." : "\nSome thresholds missed.")
         if !allPassed { exit(1) }
+    }
+
+    static func runPeople() async throws {
+        let settings = ProviderSettings.fromEnvironment()
+        guard settings.kind != .mock else { print("--people needs a provider."); exit(1) }
+        print("Identity corpus · \(settings.makeProvider().label)")
+
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ijpeople-\(UUID().uuidString)")
+        let corpus = root.appendingPathComponent("corpus")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let files = try PeopleCorpus.build(in: corpus)
+        let store = try Store(root: root.appendingPathComponent("workspace"))
+        await Meter.shared.reset()
+
+        // Ingested one at a time, in written order, because order is part of what's being
+        // tested: Joanna is established before Jose arrives and makes her initial
+        // ambiguous. A batch would hide an order-dependent bug.
+        let librarian = Librarian(store: store, provider: settings.makeProvider(),
+                                  understandingLanes: 1)
+        // A document that fails to read changes the order everything after it resolves
+        // in, so a silent failure here shows up as an identity bug three documents later.
+        // It gets reported as itself.
+        for file in files {
+            let summary = try await librarian.absorb([corpus.appendingPathComponent(file)],
+                                                     settle: false)
+            for problem in summary.problems {
+                print("  ! \(problem.file): \(problem.reason)")
+            }
+        }
+
+        let score = try PeopleCorpus.score(store: store)
+        score.print()
+        let spend = await Meter.shared.snapshot()
+        print("\n  cost: \(spend.description)")
+        if !score.passed { exit(1) }
     }
 
     /// One pass of the corpus through whatever model the environment points at, in the

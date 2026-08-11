@@ -77,6 +77,32 @@ public struct Organize: Sendable {
     /// in one, and the names in it are a list rather than a relationship.
     static let maximumBridgingBreadth = 5
 
+    /// The person a library is about, or nil when no one stands out.
+    ///
+    /// Requires both a floor and a clear lead: on a shared or topical library nobody
+    /// dominates, and suppressing whoever happens to be first would remove a real party.
+    static func owner(among rows: [Row], of total: Int) -> Int64? {
+        guard total >= ownerMinimumRecords else { return nil }
+        let ranked = rows
+            .map { (id: $0["entityID"] as Int64? ?? 0, reach: $0["reach"] as Int? ?? 0) }
+            .sorted { $0.reach > $1.reach }
+        guard let first = ranked.first,
+              Double(first.reach) / Double(total) >= ownerMinimumShare else { return nil }
+        // A clear margin over the runner-up. Without it, a landlord on seven documents
+        // and an owner on eight are indistinguishable, and suppressing the wrong one
+        // costs a real category.
+        let second = ranked.dropFirst().first?.reach ?? 0
+        guard Double(first.reach) >= Double(second) * ownerMargin else { return nil }
+        return first.id
+    }
+
+    /// Below this the library is too young to tell whose it is.
+    static let ownerMinimumRecords = 8
+    /// Appearing on this much of the library is what makes someone its subject.
+    static let ownerMinimumShare = 0.30
+    /// And clearly more than anyone else.
+    static let ownerMargin = 1.25
+
     /// What a perfect textual match is worth beside a shared name. A shared entity of
     /// average rarity scores in the low hundreds, so this puts strong similarity in the
     /// same range without letting it dominate: direct evidence still wins.
@@ -183,9 +209,31 @@ public struct Organize: Sendable {
                 GROUP BY entity.id
                 """)
 
+            // Who owns this library.
+            //
+            // Every document in a personal library is about the same person, so once
+            // extraction names them reliably they appear on everything and bridge every
+            // category into one. This showed up the moment relations were required: the
+            // model began naming the owner on 10 of 25 documents, and category purity
+            // fell from 94% to 60% with no change to clustering at all.
+            //
+            // The owner is identifiable without being told: in a library about one
+            // person, they are the person on the most documents by a clear margin. That
+            // is a fact about the shape of the data, not a guess about the content.
+            let ownerID = Self.owner(among: rows, of: total)
+
             for row in rows {
                 let reach = row["reach"] as Int? ?? 0
                 guard reach > 1 else { continue }
+                // Suppressed like a hub, and for the same reason: an entity attached to
+                // everything says nothing about which things belong together. They stay
+                // in the graph and keep every one of their edges — the dossier, the
+                // profile and "every file mentioning me" all still work. They simply
+                // stop being evidence that two *other* documents are related.
+                if let ownerID, row["entityID"] as Int64? == ownerID {
+                    hubs.append((row["name"] as String? ?? "?") + " (you)")
+                    continue
+                }
                 let entityID = row["entityID"] as Int64? ?? 0
                 let attached = try Int64.fetchAll(db, sql: """
                     SELECT CAST(SUBSTR(src, 8) AS INTEGER) FROM link

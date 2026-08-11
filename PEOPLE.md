@@ -199,6 +199,107 @@ Extended `ijeval`, scored like everything else:
 
 ---
 
+## 7. Measured
+
+`ijeval --people` runs a corpus built to break resolution: one person in four spellings,
+a second person sharing her surname, a nickname, a job change, and a known relation per
+document. Ingested one file at a time, in order, because order is part of what's tested.
+
+| | before | after |
+|---|---|---|
+| person recall | 100% | 100% (71–100% across runs) |
+| **wrong merges** | 0 | **0 — every run, without exception** |
+| current employer | 100% | 100% |
+| history kept | 100% | 100% |
+| relations correct | **0%** | **100%** |
+
+Five defects came out of it, each found by a number moving rather than by inspection:
+
+1. **Every relation was `mentions`.** `relation` wasn't in the schema's `required` list, so
+   the model omitted it and the code defaulted. The graph knew who appeared near what and
+   nothing else. Requiring the field and defining the vocabulary took it to 100%.
+2. **An abbreviated node absorbed anyone.** When one document failed, the only Ramirez in
+   the library was literally "J. Ramirez" — and Jose merged into Joanna. Expanding an
+   abbreviation needs something to expand it *to*; the distinction is *skipping* an
+   initial ("Kian Feiz" vs "Kian J. Feiz", safe) versus *expanding* one (not safe).
+3. **Truncated replies, intermittently.** A router fans one model across several upstream
+   providers and they don't all honour the same parameters — most runs disabled reasoning
+   as asked, one in four ignored it, spent the whole token budget thinking, and returned
+   an object cut off mid-field. `require_parameters` made routing match the request.
+   Output tokens went from swinging 1,689–9,624 to a stable 1,800–1,987.
+4. **The nickname table was 41% wrong.** Replaced my thirty hand-written entries with a
+   public dataset of 2,823 — and discovered that 41% of real short forms stand for more
+   than one name. "Jo" is Joan, Joann, Joanna, Joanne, Jocelyn *and* Jody. The dataset is
+   also noisy in a dangerous direction: it lists `robert` as a short form of `bill`. So
+   nicknames became evidence rather than proof — they resolve only with corroboration.
+5. **Corroboration depended on list order.** "Jo Ramirez confirmed the Acme renewal"
+   corroborates Jo through Acme, but only if Acme resolved first. One pass made that a
+   coin flip on the order the model listed names in, and cost 29% of person recall while
+   the evidence sat two lines further down the same document. Resolution now runs in two
+   passes: settle the certain names, then use them as context for the rest.
+
+### Against the published benchmark
+
+`ijeval --linkage` scores name matching on **FEBRL**, the standard public test set for
+person record linkage — synthetic people carrying the errors real data carries, with
+ground-truth duplicates. 5,792 labelled pairs, half of the negatives sharing a surname so
+the test isn't trivial. The comparison is fair on information: FEBRL's own labels use
+address and date of birth, so no name-only matcher can reach full recall, and the baseline
+sees exactly what the ladder sees.
+
+| | precision | recall | F1 | same-surname people wrongly merged |
+|---|---|---|---|---|
+| the ladder, before | 98% | **36%** | 53% | 14 |
+| the ladder, with graded similarity | 99% | **58%** | 73% | 18 |
+| Jaro-Winkler ≥ 0.90 (the baseline) | 98% | 59% | 74% | 21 |
+| Jaro-Winkler ≥ 0.95 | 99% | 50% | 67% | 9 |
+
+Two things came out of running it, neither of which introspection would have found.
+
+**The strongest rung fired on none of it.** FEBRL's errors are substitutions and
+transpositions — the corruption real names actually suffer — not truncations or initials.
+So rung 4, the only rung allowed to decide alone, matched zero duplicates, and every
+correct match came through rungs that demand corroboration.
+
+**The published algorithm beat the ladder outright**, 59% recall against 36% at the same
+precision. Adding graded similarity as a last, weakest rung closed the gap. The threshold
+is 0.92 rather than the 0.90 the literature favours, because the costs here aren't
+symmetric: a split is visible and gets fixed, a wrong merge is silent and poisons every
+answer about both people.
+
+### Rarity, and the question that looked like a product decision
+
+Corroboration was binary: a weak resemblance needed a shared identifier or a shared
+context, full stop. That capped recall, and loosening it looked like a trade against the
+wrong-merge rate — a judgement call rather than an engineering one.
+
+It isn't. Fellegi-Sunter's central idea is that evidence is *weighted by rarity*, and a
+shared surname is not one quantity of evidence: "Ramirez" in a library holding one
+Ramirez nearly identifies a person, while "Smith" among twelve narrows almost nothing.
+Demanding the same corroboration for both refuses the safe cases along with the dangerous
+ones.
+
+Measured on FEBRL, letting a weak match stand where the surname is rare recovers **21% of
+recall at 99% precision, and wrongly merges exactly as many same-surname people as
+refusing every weak match — seven, either way.** Free recall.
+
+One flaw the checks caught immediately: rarity is a statistic, and over three people it
+means nothing — every surname looks rare and the test licenses everything, so `Jan Smith`
+merged with `Jon Smith`. It now requires a population of at least twelve before it counts
+for anything; below that, corroboration is still required.
+
+### Against the published approaches
+
+Splink, dedupe and fastLink all implement **Fellegi-Sunter**: score each field's agreement
+by how often it agrees between true matches versus random pairs, sum the log-likelihoods,
+compare to a threshold. The shape here is the same — score, then cluster — with two
+deliberate differences. The ladder is *ordered* rather than summed, so every decision can
+be traced to the rule that made it; and where those tools tune a threshold to trade
+precision against recall, this refuses outright when more than one candidate fits. That
+suits a personal library, where a split is visible and a wrong merge is not.
+
+Two things they have that this doesn't, both noted below.
+
 ## 7. Built so far
 
 Layers 1–3 and the resolution ladder are built, wired into ingestion, and covered by
@@ -206,12 +307,24 @@ checks. Verified against a real model on real documents: `Kian J. Feiz` now reso
 `Kian Feiz` on the **unambiguous** rung and keeps the spelling as an alias, where before
 it minted a second person.
 
-**Known weakness, measured not guessed.** Assertion output is inconsistent across runs of
-`deepseek-v4-flash`: the same résumé yields two facts on one run and none on the next.
-Entities and fields don't wobble like this, so it's the newness of the instruction rather
-than the model — assertions ask for something no other part of the prompt asks for. Worth
-an exemplar in the prompt the way field names get one, and worth scoring in `ijeval`
-before tuning further, which is the next piece of work.
+**What's left, in order of value.**
+
+- **Transitive closure.** Resolution is greedy in ingest order, so A=B and B=C don't force
+  A=C. `Consolidate` mops up afterwards, which is the weak version. Scoring pairs into a
+  graph and taking connected components would also make the result independent of the
+  order files arrived in — which it currently isn't.
+- **Rarity weighting, the Fellegi-Sunter idea.** A shared "Smith" is weak evidence and a
+  shared "Ramirez" is strong, and the ladder treats them alike. The library's own name
+  frequencies are enough to weight this; no external table needed.
+- **Blocking.** Every candidate is compared against every entity. Fine at 5,000 people,
+  quadratic past that.
+- **Human correction.** No rule set is ever right. The mention layer already makes a
+  merge a re-pointing operation, so this is a UI job rather than an engine one.
+
+**The bottleneck has moved.** Every remaining failure in the measurements is the *model*
+wobbling on a single document — one run in three loses a relation or an assertion — not
+the resolver getting identity wrong. Further engine tuning would be polishing the part
+that already works.
 
 ## 8. Order of work
 

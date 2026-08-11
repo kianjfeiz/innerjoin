@@ -55,10 +55,10 @@ private func initials() async throws {
 }
 
 private func shortForms() async throws {
-    await expect(Resolver.couldBeTheSame("jo ramirez", "joanna ramirez"),
-                 "Jo is Joanna")
-    await expect(Resolver.couldBeTheSame("bob smith", "robert smith"),
-                 "Bob is Robert")
+    await expectEqual(Resolver.matchKind("jo ramirez", "joanna ramirez"), .nickname,
+                      "Jo is Joanna")
+    await expectEqual(Resolver.matchKind("bob smith", "robert smith"), .nickname,
+                      "Bob is Robert")
     await expect(!Resolver.couldBeTheSame("bob smith", "robert jones"),
                  "but only when the surname agrees")
 }
@@ -84,8 +84,13 @@ private func bareSurname() async throws {
     let outcome = Resolver.resolve(surface: "Ramirez", kind: .person,
                                    among: [person(1, "Joanna Ramirez")])
     await expect(outcome == nil, "one word is not enough to identify a person")
-    await expect(!Resolver.couldBeTheSame("ann", "anna"),
-                 "and near-identical single words stay apart")
+    // "Ann" and "Anna" *are* related — the dataset says so and it's right. What keeps
+    // them safe is that a nickname match alone never decides; it needs corroboration.
+    await expectEqual(Resolver.matchKind("ann", "anna"), .nickname,
+                      "related, but only as a nickname")
+    await expect(Resolver.resolve(surface: "Ann", kind: .person,
+                                  among: [person(1, "Anna")]) == nil,
+                 "so a bare short form does not merge on its own")
 }
 
 private func identifierWins() async throws {
@@ -215,4 +220,145 @@ private func mentionsRecorded() async throws {
         await expectEqual(try store.mentions(of: try require(joanna.id, "id")).count, 2,
                           "and both mentions point at her")
     }
+}
+
+/// The nickname table is now real data — 1,423 short forms from a public dataset —
+/// which is a large increase in matching power and therefore in the chance of a wrong
+/// merge. These pin the properties that make it safe.
+func nicknameDataChecks() async {
+    print("\nPeople · the nickname table")
+    await check("real short forms are recognised", realNicknames)
+    await check("two nicknames of one name are NOT each other", noSidewaysExpansion)
+    await check("an ambiguous short form still can't merge two candidates", ambiguousShortForm)
+}
+
+private func realNicknames() async throws {
+    // Ones my hand-written table never had.
+    await expect(Nicknames.stands("peggy", for: "margaret"), "Peggy is Margaret")
+    await expect(Nicknames.stands("hank", for: "henry"), "Hank is Henry")
+    await expect(Nicknames.stands("jack", for: "john"), "Jack is John")
+    await expect(Nicknames.stands("betsy", for: "elizabeth"), "Betsy is Elizabeth")
+    await expect(Nicknames.formalNames["jo"]?.contains("joanna") == true, "Jo can be Joanna")
+    // And the ambiguity the dataset actually shows, which a single-valued table hides.
+    await expect((Nicknames.formalNames["jo"]?.count ?? 0) > 1,
+                 "Jo stands for several names, and the table says so")
+}
+
+private func noSidewaysExpansion() async throws {
+    // Bob and Bert are both short for Robert. Chaining through the formal name would
+    // make them one person — the exact failure a bigger table makes more likely.
+    // Both are listed as short forms of Robert, so the table relates them. Neither can
+    // act on it alone — which is the protection, since the same table also wrongly
+    // relates `bill` and `robert`.
+    await expectEqual(Resolver.matchKind("bob chen", "bert chen"), .nickname,
+                      "the table relates them")
+    await expect(Resolver.resolve(surface: "Bert Chen", kind: .person,
+                                  among: [person(1, "Bob Chen")]) == nil,
+                 "but a nickname resemblance alone never merges two people")
+    await expectEqual(Resolver.resolve(surface: "Bob Chen", kind: .person,
+                                       alongside: [7],
+                                       among: [person(1, "Robert Chen", context: [7])])?.entityID, 1,
+                      "with corroboration it resolves")
+    // Jose is not a short form of anything, so it can never reach Joanna this way.
+    await expect(!Resolver.couldBeTheSame("jo ramirez", "jose ramirez"),
+                 "Jo does not become Jose")
+}
+
+private func ambiguousShortForm() async throws {
+    // "Jo" fits Joanna and Joan alike. With both in the library the honest answer is
+    // neither, and the uniqueness rule is what delivers it.
+    let both = Resolver.resolve(surface: "Jo Ramirez", kind: .person,
+                                among: [person(1, "Joanna Ramirez"), person(2, "Joan Ramirez")])
+    await expect(both == nil, "an ambiguous short form resolves to nobody")
+
+    let corroborated = Resolver.resolve(surface: "Jo Ramirez", kind: .person,
+                                        alongside: [9],
+                                        among: [person(1, "Joanna Ramirez", context: [9])])
+    await expectEqual(corroborated?.entityID, 1, "but resolves once something corroborates it")
+}
+
+/// Typo tolerance — the one thing the published record-linkage tools had that the ladder
+/// didn't. Found in a real dataset: "Marcus Web" and "Marcus Webb" were two people.
+func typoChecks() async {
+    print("\nPeople · misspellings")
+    await check("one misspelt word is recognised", typoRecognised)
+    await check("two different names are not a typo of each other", typoRefused)
+    await check("a misspelling alone never merges anyone", typoNeedsCorroboration)
+}
+
+private func typoRecognised() async throws {
+    await expectEqual(Resolver.matchKind("marcus web", "marcus webb"), .typo,
+                      "a dropped letter")
+    await expectEqual(Resolver.matchKind("maria gonzales", "maria gonzalez"), .typo,
+                      "a substituted letter")
+    await expectEqual(Resolver.editDistance("webb", "web"), 1, "distance is measured, not guessed")
+}
+
+private func typoRefused() async throws {
+    // One edit apart and genuinely two people. Graded similarity does see a resemblance
+    // here — Jaro-Winkler scores them 0.93 — and that is why similarity may only ever
+    // propose. What protects Jon from Jan is the corroboration neither of them has.
+    await expect(Resolver.matchKind("jon smith", "jan smith") != .typo,
+                 "a three-letter given name differing by one letter is not a typo")
+    await expect(Resolver.resolve(surface: "Jan Smith", kind: .person,
+                                  among: [person(1, "Jon Smith")]) == nil,
+                 "and resemblance alone merges nobody")
+    await expect(Resolver.matchKind("marcus web", "marcus chen") == nil,
+                 "a different surname is not a misspelling")
+    await expect(Resolver.matchKind("marc webb", "marcus webb") != .typo,
+                 "two edits is not one")
+}
+
+private func typoNeedsCorroboration() async throws {
+    let alone = Resolver.resolve(surface: "Marcus Web", kind: .person,
+                                 among: [person(1, "Marcus Webb")])
+    await expect(alone == nil, "a misspelling on its own resolves to nobody")
+
+    let corroborated = Resolver.resolve(surface: "Marcus Web", kind: .person,
+                                        alongside: [5],
+                                        among: [person(1, "Marcus Webb", context: [5])])
+    await expectEqual(corroborated?.entityID, 1, "with corroboration it resolves")
+
+    let byEmail = Resolver.resolve(surface: "Maria Gonzales", kind: .person,
+                                   identifiers: ["email:m@example.com"],
+                                   among: [person(1, "Maria Gonzalez",
+                                                  identifiers: ["email:m@example.com"])])
+    await expectEqual(byEmail?.entityID, 1, "and an address settles it outright")
+}
+
+/// Written forms from a real passenger register — 891 names, 8 titles, 143 with a maiden
+/// name in brackets. None of these shapes existed in any corpus I wrote myself.
+func writtenFormChecks() async {
+    print("\nPeople · how registers write names")
+    await check("surname-first with a title resolves to the ordinary form", invertedNames)
+    await check("an organization's legal form is not a given name", notPeople)
+}
+
+private func invertedNames() async throws {
+    // "Braund, Mr. Owen Harris" against "Owen Harris Braund" — the same passenger, and
+    // untouched the two share not one word in the same position.
+    await expectEqual(Resolver.matchKind("Braund, Mr. Owen Harris", "Owen Harris Braund"),
+                      .subsequence, "inverted order and a title are undone")
+    await expectEqual(Resolver.matchKind("Heikkinen, Miss. Laina", "Laina Heikkinen"),
+                      .subsequence, "and for a shorter name")
+    // The bracketed name is a second name for the same person, not part of this one.
+    await expectEqual(Entity.canonicalPersonForm("Futrelle, Mrs. Jacques Heath (Lily May Peel)"),
+                      "Jacques Heath Futrelle", "a bracketed maiden name is set aside")
+    await expectEqual(Entity.canonicalPersonForm("Dr. Alice Chen"), "Alice Chen",
+                      "a title in the ordinary order goes too")
+}
+
+private func notPeople() async throws {
+    // The guard that keeps this away from everything that isn't a person. Inverting
+    // "Alcon Laboratories, Inc." produces "Inc Alcon Laboratories", which then matches
+    // nothing — the checks caught exactly this.
+    await expectEqual(Entity.canonicalPersonForm("Alcon Laboratories, Inc."),
+                      "Alcon Laboratories, Inc.", "a legal form is left where it is")
+    await expectEqual(Entity.canonicalPersonForm("PG&E, Inc."), "PG&E, Inc.",
+                      "even after a one-word name")
+    await expectEqual(Entity.canonicalPersonForm("1247 Fillmore St, San Francisco"),
+                      "1247 Fillmore St, San Francisco", "an address is not an inverted name")
+    await expectEqual(Entity.normalize("Alcon Laboratories, Inc."),
+                      Entity.normalize("Alcon Laboratories"),
+                      "and the stored key is unchanged by any of this")
 }

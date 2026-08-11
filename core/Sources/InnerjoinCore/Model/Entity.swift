@@ -52,6 +52,69 @@ public struct Entity: Codable, Identifiable, Equatable, Sendable {
         self.pinnedName = pinnedName
     }
 
+    /// Puts a written name into the order and shape people actually match on.
+    ///
+    /// Three things real registers do that a plain lowercase-and-strip misses entirely,
+    /// all found in the Titanic passenger list — 891 names, 8 distinct titles, 143 with a
+    /// maiden name in brackets:
+    ///
+    ///   "Braund, Mr. Owen Harris"                        surname first, plus a title
+    ///   "Futrelle, Mrs. Jacques Heath (Lily May Peel)"   and her husband's name, and hers
+    ///   "Heikkinen, Miss. Laina"
+    ///
+    /// Untouched, "Braund, Mr. Owen Harris" normalizes to `braund mr owen harris` and
+    /// matches nothing — not even "Owen Harris Braund", the same person written the
+    /// ordinary way round.
+    public static func canonicalPersonForm(_ name: String) -> String {
+        var text = name.trimmed
+        // A maiden or married name in brackets is a *second* name for the same person, not
+        // part of this one. Dropped here and kept as an alias by the caller.
+        if let open = text.firstIndex(of: "(") {
+            text = String(text[text.startIndex..<open]).trimmed
+        }
+        // "Surname, Given Names" → "Given Names Surname".
+        //
+        // Guarded tightly, because most commas in a name are not this. An inverted name
+        // has exactly one word before the comma — the surname — so "Alcon Laboratories,
+        // Inc." and "1247 Fillmore St, San Francisco" are left alone, which the checks
+        // caught the moment the guard was missing.
+        let parts = text.components(separatedBy: ",")
+        if parts.count == 2 {
+            let head = parts[0].trimmed, tail = parts[1].trimmed
+            let headIsLoneSurname = head.components(separatedBy: .whitespaces).count == 1
+                && head.rangeOfCharacter(from: .decimalDigits) == nil
+            // "PG&E, Inc." is also one word before the comma, and inverting it produces
+            // "Inc PG&E" — which then never matches "PG&E", because the suffix stripper
+            // only looks at the end. What follows the comma has to look like a given
+            // name, not a legal form.
+            let tailIsSuffix = corporateSuffixes.contains(
+                tail.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ". ")))
+            if headIsLoneSurname, !tail.isEmpty, !tailIsSuffix {
+                text = tail + " " + head
+            }
+        }
+        // Titles say how to address someone, not who they are.
+        let words = text.components(separatedBy: .whitespaces).filter { word in
+            let bare = word.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".,"))
+            return !bare.isEmpty && !titles.contains(bare)
+        }
+        return words.joined(separator: " ")
+    }
+
+    /// Legal forms that follow a comma rather than a given name.
+    static let corporateSuffixes: Set<String> = [
+        "inc", "llc", "l.l.c", "ltd", "co", "corp", "corporation", "company",
+        "gmbh", "plc", "sa", "nv", "bv", "ag", "pty", "llp", "lp", "pc", "pllc",
+    ]
+
+    /// Forms of address, which identify nobody.
+    static let titles: Set<String> = [
+        "mr", "mrs", "ms", "miss", "mstr", "master", "dr", "prof", "professor",
+        "rev", "reverend", "fr", "sir", "dame", "lady", "lord", "hon", "honourable",
+        "capt", "captain", "col", "colonel", "major", "gen", "general", "lt", "sgt",
+        "mlle", "mme", "don", "dona", "jonkheer", "countess",
+    ]
+
     /// Cheap, deterministic normalization — the first rung of the resolution ladder.
     /// Fuzzy matching and model adjudication come later; most names match right here.
     public static func normalize(_ name: String) -> String {

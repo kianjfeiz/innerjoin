@@ -53,6 +53,10 @@ struct Checks {
         await anchorFormatChecks()
         await askChecks()
         await peopleChecks()
+        await nicknameDataChecks()
+        await scrutinyChecks()
+        await typoChecks()
+        await writtenFormChecks()
 
         print("\nGeometry")
         await check("bounding boxes convert from bottom-left origin", geometryConversion)

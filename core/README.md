@@ -27,6 +27,37 @@ swift run ijparse name                      # what each file is now called, and 
 swift run ijparse graph                     # is the graph healthy or bloating?
 ```
 
+## Noticing a document is wrong
+
+Real paperwork contains errors: a due date before the invoice date, a total that isn't
+the sum of its lines, "April 45", a delivery recorded before the shipment. Copying those
+faithfully and saying nothing leaves someone to find out the hard way.
+
+```bash
+swift run ijparse problems         # what doesn't add up, and where
+```
+
+**Flag, never fix.** The record keeps the value that is printed, because the value and
+the page it cites have to agree — the moment innerjoin silently corrects a figure, every
+citation stops meaning what it appears to mean. The objection sits beside the value.
+
+Two sources, deliberately unequal. Anything a rule can decide is decided by a rule,
+deterministically and free — date ordering, implausible dates. The model is asked only
+about what no rule can see, and everything it reports is vetted before anyone sees it:
+
+- a claim whose own arithmetic disproves it is dropped (`Subtotal 1855.75 does not match
+  450 + 749.95 + 476 + 179.8 = 1855.75` — it shows the two sides agreeing)
+- the same observation twice is listed once, matched on its figures rather than its wording
+- six findings per document, because twenty buries the one that mattered
+- the kind is read from what was written, not from the label the model chose — a
+  misspelled "Febuary" came back tagged `date_order`
+
+Measured on a 36-file corpus with a published error manifest, across 12 formats:
+**28 of 36 documents flagged, 63 findings** — impossible dates, duplicate identifiers,
+transposed totals, weekday contradictions, reversed date ranges, a typo'd email domain.
+Before the vetting the same corpus produced 17 complaints that a CSV's rows weren't in
+date order.
+
 ## Names
 
 A file arrives called `scan_0001.pdf` or `Kian Feiz - ES COE Fall 2026.pdf`. Once it's

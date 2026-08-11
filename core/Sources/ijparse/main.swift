@@ -10,7 +10,7 @@ struct IJParse: AsyncParsableCommand {
         subcommands: [Add.self, Show.self, List.self, Find.self,
                       Understand.self, Record.self, Upcoming.self, Who.self,
                       Graph.self, Tidy.self, Sort.self, Settle.self, Name.self,
-                      Ask.self, Key.self],
+                      Ask.self, Problems.self, Key.self],
         defaultSubcommand: Add.self
     )
 }
@@ -218,6 +218,9 @@ struct Understand: AsyncParsableCommand {
                 var notes = ["\(result.entityCount) entities", "\(result.dateCount) dates"]
                 if result.proposedAssertions > 0 || result.assertionCount > 0 {
                     notes.append("\(result.assertionCount)/\(result.proposedAssertions) facts kept")
+                }
+                if !result.anomalies.isEmpty {
+                    notes.append("⚠︎ \(result.anomalies.count) problems")
                 }
                 if result.droppedCitations > 0 {
                     notes.append("\(result.droppedCitations) bad citations dropped")
@@ -583,6 +586,36 @@ struct Ask: AsyncParsableCommand {
         }
         let spend = await Meter.shared.snapshot()
         if spend.calls > 0 { print("\n\(spend.description)") }
+    }
+}
+
+// MARK: - problems
+
+struct Problems: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "problems",
+        abstract: "Documents that contradict themselves. The value is kept as printed; this says what doesn't add up.")
+
+    @OptionGroup var workspace: WorkspaceOption
+
+    mutating func run() async throws {
+        let store = try workspace.open()
+        let flagged = try store.flagged()
+        guard !flagged.isEmpty else {
+            print("Nothing questionable found.")
+            return
+        }
+        for entry in flagged {
+            print("\n\(entry.document.label)")
+            for anomaly in entry.anomalies {
+                let mark = anomaly.foundBy == .checked ? "✓" : "·"
+                let where_ = anomaly.elementTag.map { " [\($0)]" } ?? ""
+                print("  \(mark) \(anomaly.kind.rawValue.padded(16)) \(anomaly.detail)\(where_)")
+            }
+        }
+        let total = flagged.reduce(0) { $0 + $1.anomalies.count }
+        let checked = flagged.flatMap(\.anomalies).filter { $0.foundBy == .checked }.count
+        print("\n\(total) in \(flagged.count) documents · \(checked) proved by rule, \(total - checked) reported by the reader")
     }
 }
 

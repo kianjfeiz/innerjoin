@@ -85,6 +85,20 @@ enum Prompt {
         rent_monthly, invoice_number, policy_number, due_date, vendor.
         - `title` names the document as a person would refer to it, not the filename.
         - `summary` is one or two sentences, plain and specific.
+        - Every entity needs a `relation` saying what it is to this document, not just \
+        that it appears in it:
+            party_to    — a signatory or counterparty: a tenant, a lessor, a contractor
+            issued_by   — who wrote or issued it: the vendor on an invoice, the insurer
+            paid_to     — who receives the money
+            employed_by — the employer, on an offer letter, contract or payslip
+            governs     — the authority whose rules apply
+            covers      — who or what a policy protects
+            located_at  — an address the document is about
+            owns        — the owner of the thing described
+            When two fit, take the more specific. An offer letter is issued by the \
+        employer *and* establishes employment: that is `employed_by`, not `issued_by`.
+            mentions    — none of the above. Use it only when nothing more specific is \
+        true; a document almost always has at least one party that isn't a mere mention.
         - Entities are the people, organizations, and places the document is *about* — \
         not every name that appears in it. A named party, yes. The city it was signed \
         in, the bank in the footer, the notary, a job title like "Tenant" — no. Most \
@@ -97,6 +111,19 @@ enum Prompt {
         that the document sets in capitals for design reasons.
         - If the document states a notice period in days, put the number in \
         `notice_days`. Do not calculate the deadline; that is done for you.
+        - Copy what the document says even when it is wrong, and say so in `problems`. \
+        If an invoice lists 2 x $389 as $877, the field value is $877 — what is printed — \
+        and `problems` gets an entry saying the line does not multiply out. Never silently \
+        correct a figure: the value and the page it came from have to agree, or a citation \
+        means nothing. Report a total that does not match its lines, a count that does not \
+        match the list, a date that cannot exist ("April 45"), dates in an impossible \
+        order, a duplicated row or identifier, and any place the document states two \
+        different values for one fact. Report nothing you had to assume.
+        - Two things that are never problems: the *order of rows* in a table or list — a \
+        file is not required to be sorted — and a value that merely looks unusual. Before \
+        writing a `problems` entry, do the arithmetic: if the two sides agree, there is \
+        nothing to report. Three or four real findings are worth more than twenty, and a \
+        long list buries whatever mattered.
         - `assertions` are durable facts *about the people and organizations named*, \
         as opposed to facts about the document. "The total is $311.25" is a field. \
         "Joanna works at Acme" is an assertion — it stays true after this document is \
@@ -126,7 +153,40 @@ enum Prompt {
 
     /// The output contract. Values are strings so the shape stays portable across
     /// providers; the two things innerjoin queries on, `amount` and dates, are typed.
-    static var schema: [String: Any] { [
+    /// Which optional jobs this prompt is doing. Every addition competes for the model's
+    /// attention with the extraction it was built for, and "competes" is a claim that
+    /// should be measured rather than assumed — so each one can be switched off and the
+    /// difference read off the eval.
+    struct Jobs {
+        var problems = true
+        var assertions = true
+
+        static var fromEnvironment: Jobs {
+            let environment = ProcessInfo.processInfo.environment
+            return Jobs(problems: environment["IJ_NO_PROBLEMS"] == nil,
+                        assertions: environment["IJ_NO_ASSERTIONS"] == nil)
+        }
+    }
+
+    static var schema: [String: Any] {
+        var schema = fullSchema
+        var properties = schema["properties"] as? [String: Any] ?? [:]
+        var required = schema["required"] as? [String] ?? []
+        let jobs = Jobs.fromEnvironment
+        if !jobs.problems {
+            properties.removeValue(forKey: "problems")
+            required.removeAll { $0 == "problems" }
+        }
+        if !jobs.assertions {
+            properties.removeValue(forKey: "assertions")
+            required.removeAll { $0 == "assertions" }
+        }
+        schema["properties"] = properties
+        schema["required"] = required
+        return schema
+    }
+
+    static var fullSchema: [String: Any] { [
         "type": "object",
         "properties": [
             "title": ["type": "string", "description": "How a person would refer to this document."],
@@ -160,6 +220,23 @@ enum Prompt {
                         "source": ["type": "string"],
                     ],
                     "required": ["kind", "date"],
+                ],
+            ],
+            "problems": [
+                "type": "array",
+                "description": "Ways this document contradicts itself. Empty if none.",
+                "items": [
+                    "type": "object",
+                    "properties": [
+                        "kind": [
+                            "type": "string",
+                            "enum": ["arithmetic", "count_mismatch", "contradiction",
+                                     "impossible_date", "date_order", "duplicate", "other"],
+                        ],
+                        "detail": ["type": "string", "description": "One plain sentence naming both values."],
+                        "source": ["type": "string", "description": "The [eN] anchor."],
+                    ],
+                    "required": ["kind", "detail"],
                 ],
             ],
             "assertions": [
@@ -201,7 +278,7 @@ enum Prompt {
                         ],
                         "source": ["type": "string"],
                     ],
-                    "required": ["name", "kind"],
+                    "required": ["name", "kind", "relation"],
                 ],
             ],
         ],
@@ -224,6 +301,7 @@ struct Reply: Decodable {
     var dates: [ProposedDate]
     var entities: [ProposedEntity]
     var assertions: [ProposedAssertion]
+    var problems: [ProposedProblem]
 
     struct ProposedField: Decodable {
         var name: String
@@ -234,6 +312,11 @@ struct Reply: Decodable {
     struct ProposedDate: Decodable {
         var kind: String
         var date: String
+        var source: String?
+    }
+    struct ProposedProblem: Decodable, Sendable {
+        var kind: String
+        var detail: String
         var source: String?
     }
     struct ProposedAssertion: Decodable {
@@ -252,7 +335,8 @@ struct Reply: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case title, kind, summary, category, amount, currency, fields, dates, entities, assertions
+        case title, kind, summary, category, amount, currency, fields, dates, entities
+        case assertions, problems
         case happenedOn = "happened_on"
         case noticeDays = "notice_days"
     }
@@ -284,5 +368,6 @@ extension Reply {
         dates = (try? container.decodeIfPresent([ProposedDate].self, forKey: .dates)) as? [ProposedDate] ?? []
         entities = (try? container.decodeIfPresent([ProposedEntity].self, forKey: .entities)) as? [ProposedEntity] ?? []
         assertions = (try? container.decodeIfPresent([ProposedAssertion].self, forKey: .assertions)) as? [ProposedAssertion] ?? []
+        problems = (try? container.decodeIfPresent([ProposedProblem].self, forKey: .problems)) as? [ProposedProblem] ?? []
     }
 }

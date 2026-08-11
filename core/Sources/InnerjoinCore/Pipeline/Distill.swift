@@ -12,7 +12,12 @@ public struct Distill: Sendable {
     /// Renditions longer than this are truncated rather than split, for now. Documents
     /// this size are rare, and a bad split is worse than a shortened one.
     let maxPromptCharacters = 220_000
-    let maxOutputTokens = 4_000
+    // Headroom, because a truncated reply is the expensive failure. A model that thinks
+    // before it writes spends tokens doing so, and when the ceiling lands mid-object the
+    // result is neither JSON nor prose — the document is simply lost, and with it every
+    // person it would have introduced. You pay only for what's generated, so the ceiling
+    // costs nothing until it's needed.
+    let maxOutputTokens = 8_000
 
     /// Whether to feed the library's accumulated vocabulary and examples back into
     /// the prompt. On by default; off is only useful for measuring what it's worth.
@@ -70,6 +75,9 @@ public struct Distill: Sendable {
         /// How many the model offered, so "it proposed none" is distinguishable from
         /// "they were all refused" — those need opposite fixes.
         public let proposedAssertions: Int
+        /// Ways the document contradicts itself. Flagged, never corrected.
+        public let anomalies: [Anomaly]
+
         /// The name the document now carries, if understanding earned it a better one.
         public let name: String?
     }
@@ -199,6 +207,12 @@ public struct Distill: Sendable {
             anchors: { resolve($0)?.tag })
         try await memory.refreshSeenDates()
 
+        // What the document gets wrong about itself. Rules first, then what the reader
+        // noticed — and the record keeps the printed value either way.
+        let anomalies = try await Scrutiny(store: store).examine(
+            documentID: documentID, reported: reply.problems,
+            anchors: { resolve($0)?.tag })
+
         // Deadlines innerjoin works out itself — never arithmetic asked of a model.
         try await addDerivedDates(for: record, reply: reply)
 
@@ -210,7 +224,8 @@ public struct Distill: Sendable {
                       dateCount: dates.count, droppedCitations: dropped,
                       refusedEntities: refusedEntities + remembered.refused,
                       assertionCount: remembered.kept,
-                      proposedAssertions: reply.assertions.count, name: name)
+                      proposedAssertions: reply.assertions.count,
+                      anomalies: anomalies, name: name)
     }
 
     struct AdmittedEntity: Sendable {
@@ -266,26 +281,54 @@ public struct Distill: Sendable {
         var known = try store.resolutionCandidates()
         let documentIdentifiers = Resolver.identifiers(in: documentText)
 
+        // Two passes, because corroboration must not depend on the order the model
+        // happened to list names in.
+        //
+        // "Jo Ramirez confirmed the Acme Corporation renewal" corroborates Jo through
+        // Acme — but only if Acme is already resolved when Jo is looked at. Resolving in
+        // one pass made that a coin flip on list order, and measured, it cost 29% of
+        // person recall: every nickname in the corpus failed to resolve while the
+        // evidence for it sat two lines further down the same document.
+        //
+        // So: settle the certain ones first, then use them as context for the rest.
         var admitted: [AdmittedEntity] = []
         var resolvedThisDocument: Set<Int64> = []
-        // Assertions name their subject by name, so they need the same mapping the
-        // gate just produced — the alternative is a second round of resolution that
-        // could disagree with the first.
         var byName: [String: Int64] = [:]
+        var outcomes: [Int: Resolver.Outcome] = [:]
 
-        for candidate in candidates {
-            let outcome = Resolver.resolve(
+        func attempt(_ index: Int, withContext: Bool) -> Resolver.Outcome? {
+            let candidate = candidates[index]
+            return Resolver.resolve(
                 surface: candidate.name, kind: candidate.kind,
                 identifiers: documentIdentifiers,
-                alongside: resolvedThisDocument,
+                alongside: withContext ? resolvedThisDocument : [],
                 among: known)
+        }
 
+        // Pass one: whatever resolves without needing this document's own context.
+        for index in candidates.indices {
+            guard let outcome = attempt(index, withContext: false) else { continue }
+            outcomes[index] = outcome
+            resolvedThisDocument.insert(outcome.entityID)
+        }
+        // Pass two: the rest, now that the document's other names are known.
+        for index in candidates.indices where outcomes[index] == nil {
+            guard let outcome = attempt(index, withContext: true) else { continue }
+            outcomes[index] = outcome
+            resolvedThisDocument.insert(outcome.entityID)
+        }
+
+        for (index, candidate) in candidates.enumerated() {
+            // Both passes ran before anything was created, so a name that matches a
+            // sibling created moments ago in this same loop still reads as unresolved.
+            // One more look, against what now exists.
+            let outcome = outcomes[index] ?? attempt(index, withContext: true)
             let entityID: Int64?
             let how: Mention.Resolution
+
             if let outcome {
                 entityID = outcome.entityID
                 how = outcome.how
-                // An identity met under a new spelling remembers the spelling.
                 try await noteAlias(candidate.name, on: outcome.entityID)
             } else {
                 how = .exact
@@ -295,9 +338,8 @@ public struct Distill: Sendable {
                     return fresh.id
                 }
                 // A document can name the same thing twice under different labels —
-                // "M. Osei" as a person and again as an org. The candidate list was read
-                // before the loop, so without this the second mention can't see the node
-                // the first one just made, and mints a duplicate.
+                // "M. Osei" as a person and again as an org. Without this the second
+                // mention can't see the node the first one just made.
                 if let entityID {
                     known.append(Resolver.Candidate(entityID: entityID, name: candidate.name,
                                                     kind: candidate.kind))
@@ -321,6 +363,7 @@ public struct Distill: Sendable {
             admitted.append(AdmittedEntity(entityID: entityID, relation: candidate.relation,
                                            confidence: candidate.confidence))
         }
+
         return (admitted, refused, byName)
     }
 

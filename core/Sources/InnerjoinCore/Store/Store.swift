@@ -230,6 +230,24 @@ public final class Store: Sendable {
             }
         }
 
+        // v8 — what's wrong with a document, as opposed to what's wrong with our reading
+        // of it. Kept beside the record rather than inside it: the record holds what the
+        // document says, and this holds why that might not be trustworthy.
+        m.registerMigration("v8_anomalies") { db in
+            try db.create(table: "anomaly") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("document", onDelete: .cascade).notNull()
+                t.column("kind", .text).notNull()
+                t.column("detail", .text).notNull()
+                t.column("elementTag", .text)
+                t.column("foundBy", .text).notNull()
+                t.column("noticedAt", .datetime).notNull()
+                // Re-reading a document replaces its anomalies rather than doubling them.
+                t.uniqueKey(["documentID", "kind", "detail"])
+            }
+            try db.create(indexOn: "anomaly", columns: ["documentID"])
+        }
+
         return m
     }
 
@@ -569,6 +587,28 @@ public final class Store: Sendable {
                 found.append(entity)
             }
             return found
+        }
+    }
+
+    public func anomalies(of documentID: Int64) throws -> [Anomaly] {
+        try dbQueue.read { db in
+            try Anomaly.filter(Anomaly.Columns.documentID == documentID)
+                .order(Anomaly.Columns.id).fetchAll(db)
+        }
+    }
+
+    /// Every document with something questionable about it, worst first.
+    public func flagged(limit: Int = 200) throws -> [(document: Document, anomalies: [Anomaly])] {
+        try dbQueue.read { db in
+            let rows = try Anomaly.order(Anomaly.Columns.documentID).fetchAll(db)
+            let grouped = Dictionary(grouping: rows, by: \.documentID)
+            return try grouped.compactMap { documentID, anomalies in
+                guard let document = try Document.fetchOne(db, key: documentID) else { return nil }
+                return (document, anomalies)
+            }
+            .sorted { $0.anomalies.count > $1.anomalies.count }
+            .prefix(limit)
+            .map { $0 }
         }
     }
 
