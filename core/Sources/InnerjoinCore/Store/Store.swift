@@ -165,6 +165,71 @@ public final class Store: Sendable {
             try db.execute(sql: "UPDATE record SET categoryHint = category WHERE categoryHint IS NULL")
         }
 
+        // v5 — the layer between a name and a person.
+        //
+        // Until now the name *was* the identity, which is why "Kian J. Feiz" and
+        // "Kian Feiz" became two people. Storing each mention as evidence, with the
+        // identity as a separate decision on top, makes merges reversible, re-reading
+        // non-destructive, and "I don't know which Ramirez this is" a legal state.
+        m.registerMigration("v6_mentions_and_assertions") { db in
+            try db.create(table: "mention") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("document", onDelete: .cascade).notNull()
+                t.column("elementTag", .text)
+                t.column("surface", .text).notNull()
+                t.column("normalized", .text).notNull()
+                t.column("kind", .text).notNull()
+                // Nullable on purpose: an unresolved mention is better than a wrong merge.
+                t.column("entityID", .integer).references("entity", onDelete: .setNull)
+                t.column("resolvedBy", .text)
+                t.column("confidence", .double).notNull().defaults(to: 1.0)
+                t.uniqueKey(["documentID", "elementTag", "normalized"])
+            }
+            try db.create(indexOn: "mention", columns: ["entityID"])
+            try db.create(indexOn: "mention", columns: ["normalized", "kind"])
+
+            try db.create(table: "assertion") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("subjectID", .integer).notNull().references("entity", onDelete: .cascade)
+                t.column("predicate", .text).notNull()
+                t.column("objectEntityID", .integer).references("entity", onDelete: .cascade)
+                t.column("objectValue", .text)
+                // Stored so the unique key can span both object shapes.
+                t.column("objectKey", .text).notNull()
+                t.column("documentID", .integer).references("document", onDelete: .cascade)
+                t.column("elementTag", .text)
+                // The document's own date, which is what makes "where does she work now"
+                // answerable separately from "where has she worked".
+                t.column("assertedOn", .datetime)
+                t.column("confidence", .double).notNull().defaults(to: 1.0)
+                t.uniqueKey(["subjectID", "predicate", "objectKey", "documentID"])
+            }
+            try db.create(indexOn: "assertion", columns: ["subjectID", "predicate"])
+
+            try db.alter(table: "entity") { t in
+                t.add(column: "firstSeenOn", .datetime)
+                t.add(column: "lastSeenOn", .datetime)
+                // The user. Excluded from clustering as before, but present so that
+                // "my landlord" is a path rather than a guess.
+                t.add(column: "isOwner", .boolean).notNull().defaults(to: false)
+                // A name the user chose, which no re-read may overwrite.
+                t.add(column: "pinnedName", .text)
+            }
+        }
+
+        // v7 — a fact's own dates, separate from the date of the document stating it.
+        //
+        // Needed because one document can state several: a résumé lists three jobs, and
+        // with only the document's date to go on, "where does he work" picked whichever
+        // the model happened to mention first. `since`/`until` are what the document says
+        // about the fact; `assertedOn` stays what the document says about itself.
+        m.registerMigration("v7_fact_validity") { db in
+            try db.alter(table: "assertion") { t in
+                t.add(column: "since", .datetime)
+                t.add(column: "until", .datetime)
+            }
+        }
+
         return m
     }
 
@@ -424,6 +489,100 @@ public final class Store: Sendable {
                     confidence: row["confidence"] as Double? ?? 1
                 )
             }
+        }
+    }
+
+    /// Everything resolution needs to weigh a name, in one query.
+    ///
+    /// Each identity carries the identifiers already known for it and the other
+    /// identities it has appeared beside, which is what rungs 2 and 3 of the ladder run
+    /// on. Fetched whole because a library of a few thousand people is small, and doing
+    /// it per-mention would be a query storm during ingestion.
+    public func resolutionCandidates() throws -> [Resolver.Candidate] {
+        try dbQueue.read { db in
+            let entities = try Entity.fetchAll(db)
+
+            var identifiers: [Int64: Set<String>] = [:]
+            for row in try Row.fetchAll(db, sql: """
+                SELECT subjectID, predicate, objectValue FROM assertion
+                WHERE predicate IN ('email', 'phone') AND objectValue IS NOT NULL
+                """) {
+                guard let subject = row["subjectID"] as Int64?,
+                      let predicate = row["predicate"] as String?,
+                      let value = row["objectValue"] as String? else { continue }
+                identifiers[subject, default: []].insert("\(predicate):\(value.lowercased())")
+            }
+
+            // Who appears beside whom. Two identities named in the same document are
+            // context for each other.
+            var context: [Int64: Set<Int64>] = [:]
+            for row in try Row.fetchAll(db, sql: """
+                SELECT a.entityID AS a, b.entityID AS b FROM mention a
+                JOIN mention b ON a.documentID = b.documentID AND a.entityID <> b.entityID
+                WHERE a.entityID IS NOT NULL AND b.entityID IS NOT NULL
+                """) {
+                guard let left = row["a"] as Int64?, let right = row["b"] as Int64? else { continue }
+                context[left, default: []].insert(right)
+            }
+
+            return entities.compactMap { entity in
+                guard let id = entity.id else { return nil }
+                return Resolver.Candidate(entityID: id, name: entity.name, kind: entity.kind,
+                                          identifiers: identifiers[id] ?? [],
+                                          context: context[id] ?? [])
+            }
+        }
+    }
+
+    public func entity(id: Int64) throws -> Entity? {
+        try dbQueue.read { db in try Entity.fetchOne(db, key: id) }
+    }
+
+    public func assertions(about entityID: Int64) throws -> [Assertion] {
+        try dbQueue.read { db in
+            try Assertion.filter(Assertion.Columns.subjectID == entityID)
+                .order(Assertion.Columns.assertedOn.desc)
+                .fetchAll(db)
+        }
+    }
+
+    /// Finds identities by any spelling they've been seen under, not just their own name.
+    public func people(matching query: String, limit: Int = 20) throws -> [Entity] {
+        let needle = Entity.normalize(query)
+        guard !needle.isEmpty else { return [] }
+        return try dbQueue.read { db in
+            let direct = try Entity
+                .filter(sql: "normName LIKE ?", arguments: ["%\(needle)%"])
+                .limit(limit).fetchAll(db)
+            var found = direct
+            var seen = Set(direct.compactMap(\.id))
+
+            // A person searched for by a spelling that only ever appeared in one
+            // document still has to be findable.
+            let viaMentions = try Entity.fetchAll(db, sql: """
+                SELECT DISTINCT entity.* FROM entity
+                JOIN mention ON mention.entityID = entity.id
+                WHERE mention.normalized LIKE ? LIMIT ?
+                """, arguments: ["%\(needle)%", limit])
+            for entity in viaMentions where !seen.contains(entity.id ?? -1) {
+                seen.insert(entity.id ?? -1)
+                found.append(entity)
+            }
+            return found
+        }
+    }
+
+    public func mentions(of entityID: Int64) throws -> [Mention] {
+        try dbQueue.read { db in
+            try Mention.filter(Mention.Columns.entityID == entityID).fetchAll(db)
+        }
+    }
+
+    /// Mentions no rule could place. Not a failure list — it's the queue a person works
+    /// through, and every one they resolve is a correction no rule could have made.
+    public func unresolvedMentions(limit: Int = 200) throws -> [Mention] {
+        try dbQueue.read { db in
+            try Mention.filter(Mention.Columns.entityID == nil).limit(limit).fetchAll(db)
         }
     }
 

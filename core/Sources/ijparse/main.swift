@@ -216,6 +216,9 @@ struct Understand: AsyncParsableCommand {
                 let result = try await distill.understand(documentID: id)
                 understood += 1
                 var notes = ["\(result.entityCount) entities", "\(result.dateCount) dates"]
+                if result.proposedAssertions > 0 || result.assertionCount > 0 {
+                    notes.append("\(result.assertionCount)/\(result.proposedAssertions) facts kept")
+                }
                 if result.droppedCitations > 0 {
                     notes.append("\(result.droppedCitations) bad citations dropped")
                 }
@@ -349,12 +352,38 @@ struct Who: AsyncParsableCommand {
             print("\n\(entities.count) found")
             return
         }
-        guard let match = entities.first(where: { $0.name.lowercased().contains(query) }) else {
+        // Search every spelling the person has appeared under, not just their own name:
+        // someone first met as "J. Ramirez" must be findable by that.
+        guard let match = try store.people(matching: query).first
+                ?? entities.first(where: { $0.name.lowercased().contains(query) }) else {
             print("Nobody matching \"\(query)\".")
             return
         }
-        print("\(match.name)  (\(match.kind.rawValue))")
-        if !match.aliases.isEmpty { print("also seen as: \(match.aliases.joined(separator: ", "))") }
+        let entityID = match.id ?? 0
+        let profile = try Memory(store: store).profile(of: entityID)
+
+        let span = [profile?.firstSeen, profile?.lastSeen].compactMap { $0 }.map(Record.day)
+        let when = span.count == 2 && span[0] != span[1] ? "  ·  \(span[0]) – \(span[1])" : ""
+        print("\(match.label)  (\(match.kind.rawValue))\(when)")
+
+        if let profile, !profile.facts.isEmpty {
+            print()
+            for fact in profile.facts {
+                let since = fact.since.map { " since \(Record.day($0))" } ?? ""
+                let cite = fact.documentID.map { id in
+                    fact.elementTag.map { " [d\(id):\($0)]" } ?? " [d\(id)]"
+                } ?? ""
+                print("  \(fact.predicate.rawValue.padded(12)) \(fact.value)\(since)\(cite)")
+                // What it replaced. People change jobs, and hiding that would make the
+                // profile quietly wrong the first time someone moves.
+                for older in fact.previously {
+                    let ended = older.on.map { " until \(Record.day($0))" } ?? ""
+                    print("  \(" ".padded(12)) \(older.value)\(ended)")
+                }
+            }
+        }
+        let spellings = profile?.alsoKnownAs ?? match.aliases
+        if !spellings.isEmpty { print("\n  known as     \(spellings.joined(separator: " · "))") }
         print()
         for record in try store.records(linkedTo: match.id ?? 0) {
             let when = record.happenedOn.map(Record.day) ?? "—"

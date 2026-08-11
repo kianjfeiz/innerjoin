@@ -15,19 +15,41 @@ public struct Entity: Codable, Identifiable, Equatable, Sendable {
     /// Other surface forms that resolved to this entity ("Alcon Laboratories, Inc.").
     public var aliases: [String]
     public var createdAt: Date
+    /// The dates of the earliest and latest documents this identity appears in — its own
+    /// dates, not when we read them. "Known since March 2024" is a fact about the person.
+    public var firstSeenOn: Date?
+    public var lastSeenOn: Date?
+    /// The user. Still kept out of clustering, but present so relationships have a
+    /// second end: "my landlord" needs a "my".
+    public var isOwner: Bool
+    /// A name the user chose. Re-reading may add aliases but must never overwrite this.
+    public var pinnedName: String?
+
+    /// What to show: the user's choice if they made one, otherwise the best form seen.
+    public var label: String { pinnedName ?? name }
 
     public enum Kind: String, Codable, CaseIterable, Sendable {
-        case person, org, place, product, account, other
+        // `project` earns its place beside the others: a body of work recurs across
+        // documents and accumulates facts exactly as a person or a company does, and
+        // filing it under `other` made it unrepresentable — `other` can never be a
+        // document's party.
+        case person, org, place, project, product, account, other
     }
 
     public init(id: Int64? = nil, name: String, kind: Kind,
-                aliases: [String] = [], createdAt: Date = Date()) {
+                aliases: [String] = [], createdAt: Date = Date(),
+                firstSeenOn: Date? = nil, lastSeenOn: Date? = nil,
+                isOwner: Bool = false, pinnedName: String? = nil) {
         self.id = id
         self.name = name
         self.normName = Entity.normalize(name)
         self.kind = kind
         self.aliases = aliases
         self.createdAt = createdAt
+        self.firstSeenOn = firstSeenOn
+        self.lastSeenOn = lastSeenOn
+        self.isOwner = isOwner
+        self.pinnedName = pinnedName
     }
 
     /// Cheap, deterministic normalization — the first rung of the resolution ladder.
@@ -60,6 +82,10 @@ extension Entity: FetchableRecord, MutablePersistableRecord {
         container["normName"] = normName
         container["kind"] = kind.rawValue
         container["createdAt"] = createdAt
+        container["firstSeenOn"] = firstSeenOn
+        container["lastSeenOn"] = lastSeenOn
+        container["isOwner"] = isOwner
+        container["pinnedName"] = pinnedName
         container["aliases"] = String(data: try JSONEncoder().encode(aliases), encoding: .utf8)
     }
 
@@ -67,6 +93,8 @@ extension Entity: FetchableRecord, MutablePersistableRecord {
         id = row["id"]; name = row["name"]; normName = row["normName"]
         kind = Kind(rawValue: row["kind"]) ?? .other
         createdAt = row["createdAt"]
+        firstSeenOn = row["firstSeenOn"]; lastSeenOn = row["lastSeenOn"]
+        isOwner = row["isOwner"] ?? false; pinnedName = row["pinnedName"]
         if let json: String = row["aliases"], let data = json.data(using: .utf8) {
             aliases = (try? JSONDecoder().decode([String].self, from: data)) ?? []
         } else { aliases = [] }

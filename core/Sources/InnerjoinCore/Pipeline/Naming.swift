@@ -197,9 +197,12 @@ public enum Naming {
     static func kindRank(_ kind: Entity.Kind) -> Int? {
         switch kind {
         case .org:     return 0
-        case .person:  return 1
-        case .place:   return 2
-        case .product: return 3
+        // A document about a project is best named after the project — "Status report —
+        // Apollo Migration" beats naming it after whoever happened to write it.
+        case .project: return 1
+        case .person:  return 2
+        case .place:   return 3
+        case .product: return 4
         case .account, .other: return nil
         }
     }

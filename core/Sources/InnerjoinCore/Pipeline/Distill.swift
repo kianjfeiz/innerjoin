@@ -65,6 +65,11 @@ public struct Distill: Sendable {
         /// Entities the gate turned away, with the reason. Surfaced rather than hidden:
         /// this list is how you tell whether extraction is over-producing.
         public let refusedEntities: [String]
+        /// Durable facts about people this document contributed.
+        public let assertionCount: Int
+        /// How many the model offered, so "it proposed none" is distinguishable from
+        /// "they were all refused" — those need opposite fixes.
+        public let proposedAssertions: Int
         /// The name the document now carries, if understanding earned it a better one.
         public let name: String?
     }
@@ -141,8 +146,9 @@ public struct Distill: Sendable {
         }
 
         let gate = EntityGate(documentText: markdown)
-        let (resolvedEntities, refusedEntities) =
-            try await resolveEntities(reply.entities, gate: gate)
+        let (resolvedEntities, refusedEntities, entitiesByName) =
+            try await resolveEntities(reply.entities, gate: gate,
+                                      documentID: documentID, documentText: markdown)
 
         let draft = record
         record = try await store.dbQueue.write { db -> Record in
@@ -183,6 +189,16 @@ public struct Distill: Sendable {
             return saved
         }
 
+        // What this document claims about the people it names — where they work, their
+        // role, how to reach them. Rides the same call, so it costs nothing extra, and
+        // is gated as strictly as the entities themselves.
+        let memory = Memory(store: store)
+        let remembered = try await memory.record(
+            reply.assertions, subjects: entitiesByName, documentID: documentID,
+            documentText: markdown, on: record.happenedOn,
+            anchors: { resolve($0)?.tag })
+        try await memory.refreshSeenDates()
+
         // Deadlines innerjoin works out itself — never arithmetic asked of a model.
         try await addDerivedDates(for: record, reply: reply)
 
@@ -192,7 +208,9 @@ public struct Distill: Sendable {
 
         return Result(record: record, entityCount: resolvedEntities.count,
                       dateCount: dates.count, droppedCitations: dropped,
-                      refusedEntities: refusedEntities, name: name)
+                      refusedEntities: refusedEntities + remembered.refused,
+                      assertionCount: remembered.kept,
+                      proposedAssertions: reply.assertions.count, name: name)
     }
 
     struct AdmittedEntity: Sendable {
@@ -207,12 +225,13 @@ public struct Distill: Sendable {
     /// Two separate jobs, deliberately: the gate decides whether something is an entity
     /// at all, and resolution decides whether it's one we've already met. Exact match on
     /// the normalized name catches most duplicates; fuzzy matching belongs to Stage 4.
-    private func resolveEntities(_ proposed: [Reply.ProposedEntity], gate: EntityGate) async throws
-        -> (admitted: [AdmittedEntity], refused: [String])
+    private func resolveEntities(_ proposed: [Reply.ProposedEntity], gate: EntityGate,
+                                 documentID: Int64, documentText: String) async throws
+        -> (admitted: [AdmittedEntity], refused: [String], byName: [String: Int64])
     {
         var refused: [String] = []
         var candidates: [(name: String, kind: Entity.Kind, relation: String,
-                          confidence: Double, mentions: Int)] = []
+                          confidence: Double, mentions: Int, source: String?)] = []
 
         for entity in proposed {
             let name = entity.name.trimmed
@@ -223,7 +242,7 @@ public struct Distill: Sendable {
             case .admit(let confidence):
                 candidates.append((name, kind,
                                    entity.relation?.trimmed.nilIfEmpty ?? "mentions",
-                                   confidence, gate.mentions(of: name)))
+                                   confidence, gate.mentions(of: name), entity.source))
             }
         }
 
@@ -239,55 +258,81 @@ public struct Distill: Sendable {
             candidates = Array(candidates.prefix(EntityGate.perDocumentLimit))
         }
 
-        var admitted: [AdmittedEntity] = []
-        for candidate in candidates {
-            let normalized = Entity.normalize(candidate.name)
-            let entityID = try await store.dbQueue.write { db -> Int64? in
-                // Matched on the name, and only loosely on the kind.
-                //
-                // A real run produced "Chen Clinic ×1 | Chen Clinic ×1", and the same
-                // for State Farm and PG&E: the model called an organization an `org` on
-                // one document and a `place` on the next, so each became two nodes and
-                // the documents that should have been tied together weren't — which is
-                // also why a third of the library wouldn't cluster. A clinic is one
-                // clinic whatever we label it.
-                // Name alone, kind ignored. I tried keeping people separate — a company
-                // named after its founder is not the founder — but the next run still
-                // showed "Eye Care of East Bay" twice, because the model had called it a
-                // person once. The hypothetical cost of merging a founder with their
-                // company is one slightly wide dossier; the measured cost of not merging
-                // is a severed graph, and with it a third of the library unfiled.
-                let sameName = try Entity
-                    .filter(Entity.Columns.normName == normalized)
-                    .order(Entity.Columns.id)
-                    .fetchAll(db)
-                let match = sameName.first { $0.kind == candidate.kind } ?? sameName.first
+        // Resolution runs through the ladder rather than exact-name matching. The
+        // library's existing identities are fetched once, and each admitted name is
+        // matched against them by identifier, then by name compatibility with
+        // corroboration, then by name compatibility with no competing candidate. A name
+        // that fits two people resolves to neither, and waits for a person.
+        var known = try store.resolutionCandidates()
+        let documentIdentifiers = Resolver.identifiers(in: documentText)
 
-                if var existing = match {
-                    var changed = false
-                    // Keep whichever kind is more specific: an early "other" shouldn't
-                    // outrank a later, better-informed reading.
-                    if existing.kind == .other, candidate.kind != .other {
-                        existing.kind = candidate.kind
-                        changed = true
-                    }
-                    if existing.name != candidate.name, !existing.aliases.contains(candidate.name) {
-                        existing.aliases.append(candidate.name)
-                        changed = true
-                    }
-                    if changed { try existing.update(db) }
-                    return existing.id
+        var admitted: [AdmittedEntity] = []
+        var resolvedThisDocument: Set<Int64> = []
+        // Assertions name their subject by name, so they need the same mapping the
+        // gate just produced — the alternative is a second round of resolution that
+        // could disagree with the first.
+        var byName: [String: Int64] = [:]
+
+        for candidate in candidates {
+            let outcome = Resolver.resolve(
+                surface: candidate.name, kind: candidate.kind,
+                identifiers: documentIdentifiers,
+                alongside: resolvedThisDocument,
+                among: known)
+
+            let entityID: Int64?
+            let how: Mention.Resolution
+            if let outcome {
+                entityID = outcome.entityID
+                how = outcome.how
+                // An identity met under a new spelling remembers the spelling.
+                try await noteAlias(candidate.name, on: outcome.entityID)
+            } else {
+                how = .exact
+                entityID = try await store.dbQueue.write { db -> Int64? in
+                    var fresh = Entity(name: candidate.name, kind: candidate.kind)
+                    try fresh.insert(db)
+                    return fresh.id
                 }
-                var fresh = Entity(name: candidate.name, kind: candidate.kind)
-                try fresh.insert(db)
-                return fresh.id
+                // A document can name the same thing twice under different labels —
+                // "M. Osei" as a person and again as an org. The candidate list was read
+                // before the loop, so without this the second mention can't see the node
+                // the first one just made, and mints a duplicate.
+                if let entityID {
+                    known.append(Resolver.Candidate(entityID: entityID, name: candidate.name,
+                                                    kind: candidate.kind))
+                }
             }
-            if let entityID {
-                admitted.append(AdmittedEntity(entityID: entityID, relation: candidate.relation,
-                                               confidence: candidate.confidence))
+            guard let entityID else { continue }
+            resolvedThisDocument.insert(entityID)
+
+            // The mention is kept whatever happened, because it is the evidence. If this
+            // resolution turns out to be wrong, re-pointing the mention fixes it without
+            // re-reading anything.
+            try await store.dbQueue.write { db in
+                var mention = Mention(documentID: documentID, elementTag: candidate.source,
+                                      surface: candidate.name, kind: candidate.kind,
+                                      entityID: entityID, resolvedBy: how,
+                                      confidence: outcome?.confidence ?? 1.0)
+                try? mention.insert(db)   // the unique key makes a repeat a no-op
             }
+
+            byName[Entity.normalize(candidate.name)] = entityID
+            admitted.append(AdmittedEntity(entityID: entityID, relation: candidate.relation,
+                                           confidence: candidate.confidence))
         }
-        return (admitted, refused)
+        return (admitted, refused, byName)
+    }
+
+    /// Records a surface form we hadn't seen for an identity we already knew.
+    private func noteAlias(_ surface: String, on entityID: Int64) async throws {
+        try await store.dbQueue.write { db in
+            guard var existing = try Entity.fetchOne(db, key: entityID) else { return }
+            let known = Set(([existing.name] + existing.aliases).map(Entity.normalize))
+            guard !known.contains(Entity.normalize(surface)) else { return }
+            existing.aliases.append(surface)
+            try existing.update(db)
+        }
     }
 
     /// A notice deadline is a term end minus a notice period. Computing it here keeps

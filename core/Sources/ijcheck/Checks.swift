@@ -52,6 +52,7 @@ struct Checks {
         await providerChecks()
         await anchorFormatChecks()
         await askChecks()
+        await peopleChecks()
 
         print("\nGeometry")
         await check("bounding boxes convert from bottom-left origin", geometryConversion)

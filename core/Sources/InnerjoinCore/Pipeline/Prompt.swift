@@ -96,7 +96,22 @@ enum Prompt {
         - Copy names as the document writes them, in the same case. Do not shout a name \
         that the document sets in capitals for design reasons.
         - If the document states a notice period in days, put the number in \
-        `notice_days`. Do not calculate the deadline; that is done for you.\(learnedBlock)
+        `notice_days`. Do not calculate the deadline; that is done for you.
+        - `assertions` are durable facts *about the people and organizations named*, \
+        as opposed to facts about the document. "The total is $311.25" is a field. \
+        "Joanna works at Acme" is an assertion — it stays true after this document is \
+        filed away, and the next document about Joanna should agree with it. Résumés, \
+        letterheads, signature blocks and email headers are full of these. Emit one per \
+        fact, with `subject` copied exactly from `entities`:
+          {"subject": "Joanna Ramirez", "predicate": "works_at", "object": "Acme", "source": "e4"}
+          {"subject": "Joanna Ramirez", "predicate": "email", "object": "joanna@acme.com", "source": "e2"}
+        When the document gives dates for a fact — a job that ran from one date to \
+        another — put them in `since` and `until`. Omit `until` when it is still the \
+        case. A document listing several jobs must date them, or there is no way to \
+        tell which one is current.
+        For `works_at`, `located_in`, `owns`, `member_of` and `related_to`, the object \
+        must also be listed in `entities`. Return an empty list if the document states \
+        nothing durable about anyone.\(learnedBlock)
         """
     }
 
@@ -147,6 +162,28 @@ enum Prompt {
                     "required": ["kind", "date"],
                 ],
             ],
+            "assertions": [
+                "type": "array",
+                "description": "Durable facts about people and organizations named here.",
+                "items": [
+                    "type": "object",
+                    "properties": [
+                        "subject": ["type": "string", "description": "The entity's name, exactly as in `entities`."],
+                        // Closed, like relations and for the same reason: an open list
+                        // gets four spellings of "employer" and stops being queryable.
+                        "predicate": [
+                            "type": "string",
+                            "enum": ["works_at", "role", "email", "phone", "located_in",
+                                     "related_to", "owns", "member_of"],
+                        ],
+                        "object": ["type": "string", "description": "The other name, or the plain value."],
+                        "since": ["type": "string", "description": "When it began, if stated. YYYY-MM-DD or YYYY-MM."],
+                        "until": ["type": "string", "description": "When it ended. Omit entirely if it is still the case."],
+                        "source": ["type": "string", "description": "The [eN] anchor."],
+                    ],
+                    "required": ["subject", "predicate", "object"],
+                ],
+            ],
             "entities": [
                 "type": "array",
                 "items": [
@@ -168,7 +205,7 @@ enum Prompt {
                 ],
             ],
         ],
-        "required": ["title", "summary", "fields", "dates", "entities"],
+        "required": ["title", "summary", "fields", "dates", "entities", "assertions"],
     ] }
 }
 
@@ -186,6 +223,7 @@ struct Reply: Decodable {
     var fields: [ProposedField]
     var dates: [ProposedDate]
     var entities: [ProposedEntity]
+    var assertions: [ProposedAssertion]
 
     struct ProposedField: Decodable {
         var name: String
@@ -198,6 +236,14 @@ struct Reply: Decodable {
         var date: String
         var source: String?
     }
+    struct ProposedAssertion: Decodable {
+        var subject: String
+        var predicate: String
+        var object: String
+        var since: String?
+        var until: String?
+        var source: String?
+    }
     struct ProposedEntity: Decodable {
         var name: String
         var kind: String?
@@ -206,7 +252,7 @@ struct Reply: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case title, kind, summary, category, amount, currency, fields, dates, entities
+        case title, kind, summary, category, amount, currency, fields, dates, entities, assertions
         case happenedOn = "happened_on"
         case noticeDays = "notice_days"
     }
@@ -237,5 +283,6 @@ extension Reply {
         fields = (try? container.decodeIfPresent([ProposedField].self, forKey: .fields)) as? [ProposedField] ?? []
         dates = (try? container.decodeIfPresent([ProposedDate].self, forKey: .dates)) as? [ProposedDate] ?? []
         entities = (try? container.decodeIfPresent([ProposedEntity].self, forKey: .entities)) as? [ProposedEntity] ?? []
+        assertions = (try? container.decodeIfPresent([ProposedAssertion].self, forKey: .assertions)) as? [ProposedAssertion] ?? []
     }
 }
