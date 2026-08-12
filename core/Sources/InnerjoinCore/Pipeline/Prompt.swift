@@ -43,7 +43,9 @@ enum Prompt {
               """
               . Reuse one of these when it fits — that is almost always the right answer. \
               Propose a new one only when the document belongs to a genuinely different \
-              area of life, and then make it an area, not a document type.
+              area of life, and then make it an area, not a document type. A near miss is \
+              still a reuse: a shelf spelt two ways is two shelves, and nobody ever looks \
+              on the second one.
               """
 
         var learnedBlock = ""
@@ -119,6 +121,15 @@ enum Prompt {
         match the list, a date that cannot exist ("April 45"), dates in an impossible \
         order, a duplicated row or identifier, and any place the document states two \
         different values for one fact. Report nothing you had to assume.
+        - Report a word misspelt where the document plainly meant another: "Febuary" for \
+        February, "recieving", "Sincerly", a domain typed "exmaple.com". A name you simply \
+        don't recognise is not a misspelling — surnames, places and products are spelt how \
+        they are spelt, and guessing at them is how this becomes noise.
+        - Report a value written in a different shape from the others around it: "N/A" in \
+        a column of numbers, "24,50" among decimal points, "USD 49.99" where the rest are \
+        bare amounts, a quantity spelt "two" among digits, kWh beside kwh. One fact \
+        written two ways cannot be compared, sorted or added up, which is the whole \
+        purpose of having read it.
         - Two things that are never problems: the *order of rows* in a table or list — a \
         file is not required to be sorted — and a value that merely looks unusual. Before \
         writing a `problems` entry, do the arithmetic: if the two sides agree, there is \
@@ -168,8 +179,26 @@ enum Prompt {
         }
     }
 
-    static var schema: [String: Any] {
-        var schema = fullSchema
+    /// The output contract.
+    ///
+    /// The categories are *not* pinned here as an enum, and that was measured rather than
+    /// assumed. Closing the list looked obviously right — relations and predicates were
+    /// closed for exactly this reason and stopped fragmenting — and it made things worse:
+    /// purity fell from a mean of 75% to 64% and its spread across four runs widened from
+    /// 14 points to 43.
+    ///
+    /// The difference is where the vocabulary comes from. Relations are a fixed list
+    /// written once. Categories are *learned* from whatever has been filed so far, and
+    /// documents are read in parallel — so closing the list hands whichever documents
+    /// happen to finish first the power to define the shelves, and forces every later
+    /// document to choose among them. That amplifies the ordering noise instead of
+    /// damping it.
+    static var schema: [String: Any] { schema(Learned.none) }
+
+    static func schema(_ learned: Learned) -> [String: Any] { narrowed(fullSchema) }
+
+    private static func narrowed(_ base: [String: Any]) -> [String: Any] {
+        var schema = base
         var properties = schema["properties"] as? [String: Any] ?? [:]
         var required = schema["required"] as? [String] ?? []
         let jobs = Jobs.fromEnvironment
@@ -231,7 +260,15 @@ enum Prompt {
                         "kind": [
                             "type": "string",
                             "enum": ["arithmetic", "count_mismatch", "contradiction",
-                                     "impossible_date", "date_order", "duplicate", "other"],
+                                     "impossible_date", "date_order", "duplicate",
+                                     // Both were already kinds the store understood and
+                                     // neither could be said. Measured against a corpus
+                                     // with the faults written down, they were the two
+                                     // whole classes going unreported: every misspelling,
+                                     // and every value written in a shape its neighbours
+                                     // aren't ("N/A" among numbers, "24,50" among
+                                     // decimal points).
+                                     "typo", "inconsistent_format", "other"],
                         ],
                         "detail": ["type": "string", "description": "One plain sentence naming both values."],
                         "source": ["type": "string", "description": "The [eN] anchor."],

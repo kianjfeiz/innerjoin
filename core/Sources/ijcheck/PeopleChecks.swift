@@ -362,3 +362,69 @@ private func notPeople() async throws {
                       Entity.normalize("Alcon Laboratories"),
                       "and the stored key is unchanged by any of this")
 }
+
+func discriminatorChecks() async {
+    print("\nPeople · the part of a name that tells two people apart")
+    await check("a generation or reign is not a misspelling", generationsStayApart)
+    await check("numbers that contradict separate; numbers that add do not", numbersDiscriminate)
+    await check("middle initials that disagree don't decide alone", initialsMustAgree)
+    await check("a shared given name doesn't carry a match on its own", sharedWordsDontCarry)
+}
+
+private func generationsStayApart() async throws {
+    // The merge a family archive can't afford. Every other rung reads "III" as "II" with
+    // a slip of the finger.
+    await expectNil(Resolver.matchKind("Robert Feiz Jr", "Robert Feiz Sr"),
+                    "a junior is not a senior")
+    await expectNil(Resolver.matchKind("Gordian II", "Gordian III"),
+                    "nor is one emperor the next")
+    // Only when both names say so. A name that simply doesn't record a generation isn't
+    // contradicting one that does.
+    await expectEqual(Resolver.matchKind("Robert Feiz", "Robert Feiz Jr"), .subsequence,
+                      "silence is not disagreement")
+}
+
+private func numbersDiscriminate() async throws {
+    // Japanese writes the same distinction with digits and no spaces to find them between.
+    await expectNil(Resolver.matchKind("ゴルディアヌス2世", "ゴルディアヌス3世"),
+                    "a regnal number in any script")
+    // Compared where both names speak. An apartment elaborates on an address; it does
+    // not contradict it.
+    await expectEqual(Resolver.numbers(in: "1247 fillmore st apt 4"), ["1247", "4"],
+                      "digit runs are read in order")
+    await expectNotNil(Resolver.matchKind("1247 Fillmore St", "1247 Fillmore St, Apt 4"),
+                       "adding a number is not contradicting one")
+}
+
+private func initialsMustAgree() async throws {
+    // A literal subsequence, a father and a son. Measured on real names, where it merged.
+    await expect(Resolver.initialsDisagree("George W. Bush", "George H. W. Bush"),
+                 "two names that both state initials, differently")
+    await expect(!Resolver.initialsDisagree("Kian Feiz", "Kian J. Feiz"),
+                 "one name stating nothing disagrees with nothing")
+}
+
+private func sharedWordsDontCarry() async throws {
+    // Jaro-Winkler's prefix bonus rewards the shared word hardest, which is the word that
+    // identifies neither of them. Both of these merged before the leftover words had to
+    // agree too.
+    await expectNil(Resolver.matchKind("Mohammad Hatta", "Mohammad Ahsan"),
+                    "a common given name is not evidence")
+    await expectNil(Resolver.matchKind("Nguyễn Chí Thiện", "Nguyễn Hải Thần"),
+                    "nor a surname two-fifths of a country carries")
+    // What the rungs are actually for still passes. One edit is a typo, which is caught
+    // before similarity is ever consulted; two edits across two words is what falls
+    // through to graded similarity, and it has to survive the floor.
+    await expectEqual(Resolver.matchKind("Peter Smith", "Peter Smyth"), .typo,
+                      "a single-letter surname slip is a typo")
+    // The floor itself, measured on the case it must not block: a misspelt surname scores
+    // 0.89 against its correct spelling, which is why the floor sits below the threshold
+    // that governs the whole name.
+    await expect(Resolver.distinguishingSimilarity(["peter", "smith"], ["peter", "smyth"])
+                 >= Resolver.distinguishingFloor, "a misspelt surname clears the floor")
+    await expect(Resolver.distinguishingSimilarity(["david", "cameron"], ["david", "paterson"])
+                 < Resolver.distinguishingFloor, "two unrelated surnames do not")
+    // The same words in another order is one name written two ways.
+    await expectEqual(Resolver.distinguishingSimilarity(["dung", "nguyen"], ["nguyen", "dung"]), 1.0,
+                      "word order is a convention, not a difference")
+}

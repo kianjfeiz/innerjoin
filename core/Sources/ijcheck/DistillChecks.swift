@@ -337,3 +337,5 @@ private func providerFailureIsSurvivable() async throws {
         await expect(try !store.search("Fillmore").isEmpty, "and it's still searchable")
     }
 }
+
+

@@ -51,7 +51,8 @@ enum Linkage {
         }))
         results.append(("innerjoin — decides alone (rung 4)", score(pairs) {
             switch Resolver.matchKind($0, $1) {
-            case .subsequence, .initials: return true
+            case .subsequence: return !Resolver.initialsDisagree($0, $1)
+            case .initials: return true
             default: return false
             }
         }))
@@ -96,6 +97,8 @@ enum Linkage {
                 switch Resolver.matchKind(left, right) {
                 case .subsequence, .initials:
                     return true
+                case .surname:
+                    return false
                 case .similar, .typo, .nickname:
                     // A weak resemblance decides alone only when the surname is rare
                     // enough that few other people could be behind it.

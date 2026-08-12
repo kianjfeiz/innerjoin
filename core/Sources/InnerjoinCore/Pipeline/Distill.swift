@@ -109,7 +109,7 @@ public struct Distill: Sendable {
         let data = try await provider.extract(
             system: Prompt.system(learned),
             user: Prompt.user(name: document.name, markdown: prompt),
-            schema: Prompt.schema,
+            schema: Prompt.schema(learned),
             maxTokens: maxOutputTokens
         )
 

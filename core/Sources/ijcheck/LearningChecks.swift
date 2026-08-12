@@ -30,7 +30,7 @@ final class PromptSpy: ModelProvider, @unchecked Sendable {
 
 private func plainReply(_ fieldName: String) -> String {
     """
-    {"title":"Doc","summary":"s","category":"Invoices","kind":"invoice",
+    {"title":"Doc","summary":"s","category":"Supplies","kind":"invoice",
      "fields":[{"name":"\(fieldName)","value":"$100.00","source":"e0"}],
      "dates":[],"entities":[]}
     """
@@ -46,7 +46,7 @@ private func seedNaming(_ store: Store, name: String, copies: Int) async throws 
     let ingest = Ingest(store: store)
     for index in 0..<copies {
         let file = folder.appendingPathComponent("invoice\(index).md")
-        try "# Invoice \(index)\n\nTotal due $100.00 from Alcon Laboratories."
+        try "# Office supplies invoice \(index)\n\nTotal due $100.00 from Alcon Laboratories."
             .write(to: file, atomically: true, encoding: .utf8)
         let result = try await ingest.add(fileAt: file)
         let id = try require(result.document.id, "id")
@@ -91,7 +91,7 @@ private func exemplarIsShown() async throws {
             .appendingPathComponent("ij-learn-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent("invoice_show.md")
-        try "# Invoice 9\n\nTotal due $9.00 from Alcon Laboratories."
+        try "# Office supplies invoice 9\n\nTotal due $9.00 from Alcon Laboratories."
             .write(to: file, atomically: true, encoding: .utf8)
         let result = try await Ingest(store: store).add(fileAt: file)
 
@@ -137,7 +137,7 @@ private func divergenceIsDetected() async throws {
             .appendingPathComponent("ij-learn-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent("odd_one.md")
-        try "# Invoice odd\n\nTotal due $77.00 from Alcon Laboratories."
+        try "# Office supplies invoice odd\n\nTotal due $77.00 from Alcon Laboratories."
             .write(to: file, atomically: true, encoding: .utf8)
         let result = try await Ingest(store: store).add(fileAt: file)
         let oddID = try require(result.document.id, "id")
@@ -159,7 +159,7 @@ private func refinementConverges() async throws {
             .appendingPathComponent("ij-learn-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let file = folder.appendingPathComponent("stray.md")
-        try "# Invoice stray\n\nTotal due $12.00 from Alcon Laboratories."
+        try "# Office supplies invoice stray\n\nTotal due $12.00 from Alcon Laboratories."
             .write(to: file, atomically: true, encoding: .utf8)
         let result = try await Ingest(store: store).add(fileAt: file)
         _ = try await Distill(store: store, provider: PromptSpy { _ in plainReply("amount_due") })

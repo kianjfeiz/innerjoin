@@ -87,7 +87,21 @@ public enum Resolver {
         }
 
         // Everything below needs the names to at least be compatible.
-        let compatible = sameKind.filter { couldBeTheSame(normalized, $0.normalized) }
+        let compatible = sameKind.filter { candidate in
+            guard let how = matchKind(normalized, candidate.normalized) else { return false }
+            // Standing in a whole name's place with one word is something *people's*
+            // names do. Everything else it was let loose on, it wrecked: "Fillmore"
+            // reaching "1247 Fillmore St", "Pacific" reaching "Pacific Gas and Electric",
+            // "Care" reaching "Eye Care of East Bay". Measured, the damage was plain —
+            // category purity fell from 86% to 67% and the library lost two of its
+            // sixteen identities to merges like those.
+            //
+            // A word is a smaller share of an organization's name than of a person's, and
+            // organizations genuinely differ by one: Apple and Apple Records are not the
+            // same company. So the rung is confined to the case that motivated it.
+            if how == .surname && kind != .person { return false }
+            return true
+        }
         guard !compatible.isEmpty else { return nil }
 
         // 3 — compatible, and it already knows someone else in this document. Two
@@ -151,10 +165,22 @@ public enum Resolver {
 
         let expandable = compatible.filter { candidate in
             switch matchKind(normalized, candidate.normalized) {
-            case .subsequence: return true
+            // Skipping a middle initial is safe when the shorter name simply doesn't
+            // record one. It is not safe when it records a *different* one: "George W.
+            // Bush" is a literal subsequence of "George H. W. Bush", and the ladder
+            // merged a father into his son on the strength of it. Where both names state
+            // their initials and the statements disagree, this proposes and waits for
+            // corroboration instead of deciding.
+            case .subsequence: return !initialsDisagree(normalized, candidate.normalized)
             case .initials:    return !isAbbreviated(candidate.normalized)
             // A resemblance proposes rather than decides — unless the surname is itself
             // rare enough that there is hardly anyone else it could be.
+            // A bare surname never decides, however rare it looks. The rarity test asks
+            // how many people could be behind a *name*, and a lone surname isn't one —
+            // it names a household. In a library holding only Vahid Feiz it would read as
+            // unique and merge "Feiz" into him, which is right until the day a second
+            // Feiz arrives and every earlier merge is silently wrong.
+            case .surname: return false
             case .nickname, .typo, .similar:
                 return populationIsBigEnough && sharingSurname <= rareSurnameCeiling
             case .none:                      return false
@@ -190,6 +216,9 @@ public enum Resolver {
         case subsequence
         /// One side abbreviates a word the other spells out, so something is.
         case initials
+        /// One name is a single word the other contains — "Gandhi" for "Mahatma Gandhi".
+        /// Weak by construction: a surname names a family, not a person.
+        case surname
         /// A short form standing in for a given name. Weak: see below.
         case nickname
         /// One word misspelt, every other word identical.
@@ -211,9 +240,54 @@ public enum Resolver {
         let second = b.split(separator: " ").map(String.init)
         guard !first.isEmpty, !second.isEmpty else { return nil }
 
+        // A generation or a regnal number is the only part of the name doing any work.
+        // Every other rung treats a trailing "III" as noise a letter away from "II", so
+        // the two get merged — which is backwards, because that suffix is precisely what
+        // distinguishes a father from a son on a deed, or one emperor from the next.
+        //
+        // Found by measurement, on real names: "Гордиан II" against "Гордиан III" and
+        // "Аменемхет IV" against "Аменемхет II" both merged through graded similarity.
+        // The same shape is "Robert Feiz Jr." against "Robert Feiz Sr." — two people who
+        // appear in the same file drawer, and the one merge a family archive can't afford.
+        //
+        // It only fires when *both* names carry a mark. That asymmetry is deliberate: it
+        // keeps the rule from reading a surname as a numeral — "li" and "vi" are Roman
+        // numerals and also names — because two names each ending in one are different
+        // people either way.
+        if let left = generation(of: first), let right = generation(of: second), left != right {
+            return nil
+        }
+
+        // The same idea where the numbers are digits rather than Roman numerals, and
+        // where there may be no spaces to find them between: Japanese writes Gordian III
+        // as ゴルディアヌス3世, one word. Found the same way — the word-based rule above
+        // couldn't see it, and the two emperors merged.
+        //
+        // Compared position by position, because a number that *contradicts* is not a
+        // number that merely *adds*. "1247 Fillmore St" and "1247 Fillmore St, Apt 4"
+        // agree as far as they both go, and one is the address of the other; "Amenemhat
+        // 4" and "Amenemhat 2" disagree at the first thing they both state. Silence isn't
+        // disagreement — the same rule the middle initials get.
+        for (left, right) in zip(numbers(in: a), numbers(in: b)) where left != right {
+            return nil
+        }
+
         let (longer, shorter) = first.count >= second.count ? (first, second) : (second, first)
-        // A single word is not enough to identify a person. "Feiz" could be any Feiz, and
-        // treating a bare surname as a match is how families get merged into one person.
+        // A single word is not enough to *identify* a person — "Feiz" could be any Feiz,
+        // and treating a bare surname as proof is how a family becomes one person. But
+        // refusing it outright was costing more than it saved: documents refer to people
+        // by surname constantly ("per Ms. Ramirez", "Chen confirmed"), and measured
+        // against real name variants this single rule was the largest single source of
+        // missed matches — "Gandhi" never reached "Mahatma Gandhi".
+        //
+        // So it proposes and never decides. Rung 3 can act on it with a shared context
+        // behind it; rung 4 never can, whatever the library looks like.
+        if shorter.count == 1, longer.count > 1 {
+            // Two letters is an abbreviation, not a name, and the initials rung owns
+            // those. Below that this would match half the library.
+            guard let lone = shorter.first, lone.count >= 3 else { return nil }
+            return longer.contains(lone) ? .surname : nil
+        }
         guard shorter.count >= 2 || longer.count == shorter.count else { return nil }
 
         // Literal agreement first, so a match that needs no nickname table isn't
@@ -233,8 +307,132 @@ public enum Resolver {
         //
         // It stays a proposing rung, so the discipline is unchanged — what improves is
         // how much there is to corroborate.
-        return similarity(a, b) >= similarityThreshold ? .similar : nil
+        guard similarity(a, b) >= similarityThreshold else { return nil }
+        // Whole-string similarity is dominated by whatever the two names share, and
+        // Jaro-Winkler's prefix bonus doubles down on it. So two people who happen to
+        // share a very common given name score as near-identical on the strength of the
+        // part that identifies neither of them.
+        //
+        // Measured on real names: "Mohammad Hatta" merged with "Mohammad Ahsan", and
+        // "Nguyễn Chí Thiện" with "Nguyễn Hải Thần" — Nguyễn being a surname roughly
+        // two-fifths of Vietnamese people carry. In both, the shared word is the
+        // uninformative one and the words that tell them apart are nothing alike.
+        //
+        // So the shared words are set aside and what remains has to agree too. This is
+        // deliberately a floor rather than a second full threshold: "Smith" against
+        // "Smyth" scores 0.89 alone and must still pass, since a one-letter surname slip
+        // is exactly what this rung exists to catch.
+        return distinguishingSimilarity(first, second) >= distinguishingFloor ? .similar : nil
     }
+
+    /// How alike two names are once the words they literally share are set aside.
+    ///
+    /// Returns 1 when nothing is left — the same words in a different order, which is one
+    /// name written under two conventions ("Nguyễn Tấn Dũng" and "Dũng Nguyễn Tấn") rather
+    /// than two names.
+    public static func distinguishingSimilarity(_ first: [String], _ second: [String]) -> Double {
+        var left = first, right = second
+        for word in first {
+            guard let mine = left.firstIndex(of: word),
+                  let theirs = right.firstIndex(of: word) else { continue }
+            left.remove(at: mine); right.remove(at: theirs)
+        }
+        // A lone initial distinguishes nothing — it is the same name with less of it
+        // written down. Dropping it keeps a middle initial on one side only from making
+        // the two look like different-length names and failing the test below.
+        left.removeAll { $0.count == 1 }
+        right.removeAll { $0.count == 1 }
+        if left.isEmpty && right.isEmpty { return 1 }
+        // Different numbers of real words left over: the literal rungs above own that
+        // case, and judging it here would be guessing which word went missing.
+        guard left.count == right.count else { return 0 }
+
+        // Each leftover word answers to its best remaining counterpart, and the weakest
+        // of those pairings is the score — one word that matches nothing is enough to
+        // make them different people.
+        var weakest = 1.0
+        for word in left {
+            var best = 0.0, bestIndex = 0
+            for (index, other) in right.enumerated() {
+                let score = similarity(word, other)
+                if score > best { best = score; bestIndex = index }
+            }
+            guard !right.isEmpty else { break }
+            right.remove(at: bestIndex)
+            weakest = min(weakest, best)
+        }
+        return weakest
+    }
+
+    /// How alike the *distinguishing* words have to be. Below the main threshold on
+    /// purpose: this rung's whole job is a misspelt surname, and a misspelt surname
+    /// scores in the high eighties against its correct spelling — "Smith" against
+    /// "Smyth" is 0.89.
+    ///
+    /// Swept over 753,083 real name pairs and FEBRL's 5,792 labelled ones:
+    ///
+    ///     0.70   46 wrong merges   41% alias recall   55% FEBRL recall
+    ///     0.75   41                40%                55%
+    ///     0.82   31                40%                55%
+    ///     0.85   25                39%                54%
+    ///     0.90   21                37%                53%
+    ///
+    /// 0.82 is where the free precision runs out: a quarter fewer wrong merges than 0.75
+    /// for nothing at all. Past 0.85 every further merge prevented costs real recall, and
+    /// the asymmetry that governs the main threshold governs this one too — but a split
+    /// someone has to fix by hand is still a cost, so it stops where the trade begins.
+    /// `ijeval --names` re-runs the sweep.
+    public static let distinguishingFloor =
+        Double(ProcessInfo.processInfo.environment["IJ_DISTINGUISHING_FLOOR"] ?? "") ?? 0.82
+
+    /// Whether two names both state their middle initials and state different ones.
+    ///
+    /// Silence isn't disagreement: "Kian Feiz" against "Kian J. Feiz" is one person
+    /// written two ways, and only one of the two names has anything to say. Both speaking
+    /// and contradicting each other is a different matter — that is two people.
+    public static func initialsDisagree(_ a: String, _ b: String) -> Bool {
+        let left = middleInitials(of: Entity.normalize(Entity.canonicalPersonForm(a)))
+        let right = middleInitials(of: Entity.normalize(Entity.canonicalPersonForm(b)))
+        guard !left.isEmpty, !right.isEmpty else { return false }
+        return left != right
+    }
+
+    /// The single letters between the first word and the last, which is where a middle
+    /// initial lives. A leading "J." is an abbreviated given name, and the initials rung
+    /// already knows what to do with those.
+    private static func middleInitials(of name: String) -> [String] {
+        let words = name.split(separator: " ").map(String.init)
+        guard words.count > 2 else { return [] }
+        return words[1..<(words.count - 1)].filter { $0.count == 1 }
+    }
+
+    /// The runs of digits in a name, in the order they appear.
+    public static func numbers(in name: String) -> [String] {
+        var runs: [String] = []
+        var current = ""
+        for character in name {
+            if character.isNumber { current.append(character) }
+            else if !current.isEmpty { runs.append(current); current = "" }
+        }
+        if !current.isEmpty { runs.append(current) }
+        return runs
+    }
+
+    /// The generation or reign a name ends with, if it ends with one.
+    ///
+    /// Bounded at the regnal numerals people actually carry (I–XX) rather than every
+    /// legal Roman numeral, because "LI", "MI", "CI" and "DI" are all valid numbers and
+    /// all ordinary syllables in names.
+    static func generation(of words: [String]) -> String? {
+        guard let last = words.last, words.count >= 2 else { return nil }
+        return generationMarks.contains(last) ? last : nil
+    }
+
+    private static let generationMarks: Set<String> = {
+        let regnal = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+                      "xi", "xii", "xiii", "xiv", "xv", "xvi", "xvii", "xviii", "xix", "xx"]
+        return Set(regnal + ["jr", "sr", "junior", "senior", "2nd", "3rd", "4th", "5th"])
+    }()
 
     /// One word misspelt and the rest identical — "Marcus Web" against "Marcus Webb",
     /// "Gonzales" against "Gonzalez".

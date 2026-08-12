@@ -112,7 +112,34 @@ resolves at the first rung that fires, and records which one.
 - **subsequence** — `kian feiz` ⊆ `kian j feiz` (in order). Fixes the split; generalizes it.
 - **initials** — `j. ramirez` matches `joanna ramirez` when the surname matches and the
   initial matches the given name's first letter.
-- **nickname** — a small table: Bob/Robert, Jo/Joanna, Kate/Katherine.
+- **nickname** — a public table of 1,423 short forms. One-to-many and noisy, so it
+  proposes and never decides.
+- **surname** — a lone word the other name contains: `Gandhi` for `Mahatma Gandhi`.
+  Documents refer to people this way constantly ("per Ms. Ramirez"), and refusing it was
+  the single largest source of missed matches — 40% → 61% recall on real name variants.
+  Confined to people: turned loose on organizations and places it reached "Fillmore" for
+  "1247 Fillmore St" and cost 19 points of category purity. Proposes, never decides.
+- **typo** — one word misspelt, every other word identical.
+- **similar** — Jaro-Winkler ≥ 0.92 over the whole name, *and* ≥ 0.82 over what's left
+  once the shared words are set aside. The second test exists because the first is
+  dominated by whatever the two names have in common, and Jaro-Winkler's prefix bonus
+  doubles down on it — "Mohammad Hatta" and "Mohammad Ahsan" scored as near-identical on
+  the strength of the word identifying neither.
+
+**And three rules about what *can't* match**, each found by measurement rather than
+reasoning, and each the same shape: the part of a name doing the identifying is the part
+the fuzzy rungs treat as noise.
+
+- **generations and reigns** — `Robert Feiz Jr` is not `Robert Feiz Sr`; `Gordian II` is
+  not `Gordian III`. Only when both names carry a mark, so a surname that happens to be a
+  Roman numeral ("Li", "Vi") can't be misread as one.
+- **numbers** — the same rule where the numeral is a digit and there are no spaces to find
+  it between: Japanese writes Gordian III as `ゴルディアヌス3世`. Compared position by
+  position, because a number that *adds* isn't a number that *contradicts*: "1247 Fillmore
+  St, Apt 4" elaborates on "1247 Fillmore St".
+- **middle initials** — when both names state them and they differ. `George W. Bush` is a
+  literal subsequence of `George H. W. Bush`, and the ladder merged a father into his son.
+  Silence isn't disagreement: `Kian Feiz` against `Kian J. Feiz` still matches.
 
 Rung 4 is the safety rail and the most important rule here. Merge "J. Ramirez" into
 "Joanna Ramirez" **only if she is the only Ramirez it could be.** If a Jose Ramirez also
@@ -200,6 +227,89 @@ Extended `ijeval`, scored like everything else:
 ---
 
 ## 7. Measured
+
+### Against real names, from every naming system
+
+`ijeval --names` scores the matcher against names drawn from Wikidata, where the truth is
+real rather than invented: a differing Q-number is a different person, and an `altLabel` is
+a name the same person is genuinely known by. 753,083 pairs across eleven naming systems —
+Han, kana, Cyrillic, Arabic, Spanish double surnames, Icelandic patronymics, Dutch
+particles, Indonesian mononyms, Vietnamese surname-first.
+
+Every corpus before this one was Anglo-American, and so was every rule in the ladder.
+
+| | before | after |
+|---|---|---|
+| wrong merges, all systems | 105 | **31** |
+| Han (no spaces) | 6 | **0** |
+| kana | 7 | **1** |
+| Vietnamese | 1 (24.6 per 10k) | **0** |
+| Indonesian | 1 | **0** |
+| Spanish | 56 | **16** |
+| alias recall (reachable) | 42% | **61%** |
+| FEBRL recall | 58% | 55% |
+
+The one number that moved the wrong way is FEBRL's, and it is worth being plain about:
+three points of recall on a synthetic single-culture benchmark bought a two-thirds
+reduction in wrong merges on real names from eleven cultures. FEBRL's errors are
+substitutions inside a word, which is the one thing the distinguishing-word floor makes
+harder to accept.
+
+**What the misses look like now.** The remaining recall gap is mostly not reachable by any
+string algorithm: `Mahatma Gandhi` ↛ `M. K. Gandhi`, because "Mahatma" is an honorific and
+his given name was Mohandas. Knowing that is world knowledge, not string comparison.
+
+### Two things that looked obviously right and weren't
+
+Both were tried, measured over four runs each, and reverted. They are recorded because the
+reasoning behind each still looks sound, and the next person to have the idea should get
+the measurement for free.
+
+**Closing the category vocabulary.** Relations and predicates are closed enums, and closing
+them stopped them fragmenting; categories were the last open vocabulary. Pinning them in
+the schema made it *worse* — purity fell from a mean of 75% to 64%, and the spread across
+four runs widened from 14 points to 43. The difference is where the vocabulary comes from:
+relations are a fixed list written once, categories are learned from whatever has been
+filed so far, and documents are read in parallel. Closing a *learned* list hands whichever
+documents finish first the power to define the shelves and forces every later document to
+choose among them — amplifying the ordering noise rather than damping it.
+
+**Refusing a category that repeats the document's type.** A shelf called "Statements"
+collects one document type from every corner of a life, and the eval showed exactly that.
+Refusing it raised purity's mean 75% → 80%, but the bands overlapped almost entirely
+([67–81] against [67–85]), coverage clearly fell 84% → 79%, and answer accuracy lost the
+perfect stability it had held over four runs. By the standard set above — believe it when
+the bands separate — purity didn't move and coverage did.
+
+Chasing that one down did find a real bug, in a place I'd spent a while blaming the model
+for. The impure shelves were not proposed by the model at all: when a cluster's vote fails,
+`Organize.name(for:)` falls back to the document type, and it built that label as
+`kind + "s"`. `"policy" + "s"` is **"Policys"** — the misspelt shelf I had been attributing
+to a careless reading was written in Swift, by me.
+
+### On measurement itself
+
+The pipeline's numbers move between runs that are byte-identical in every input, and it
+took a wasted afternoon in a previous session to stop attributing that to code.
+
+`temperature: 0` and a fixed `seed` do **not** make this model reproducible. Tested
+directly: the same request three times returned replies of 2347, 2366 and 2368 characters.
+A one-line question does come back identical, which is what makes the promise so easy to
+believe. The provider returns no `system_fingerprint`, so there isn't even a way to notice
+when the machine underneath changes.
+
+So a single run is one sample. `ijeval --real --repeat N` reports mean and spread, and a
+change is only believable when the bands separate. Across four runs of the corpus, ten of
+eleven metrics were pinned at 100% with zero spread; **category purity was the only
+unstable one**, at 67–81%. That is where the variance lives, and knowing that is worth
+more than any single run's number.
+
+The deterministic benchmarks — `--names`, `--linkage`, `ijcheck` — have none of this
+problem, which is exactly why the resolver work is measured there and the numbers above
+are exact.
+
+### Against the identity corpus
+
 
 `ijeval --people` runs a corpus built to break resolution: one person in four spellings,
 a second person sharing her surname, a nickname, a job change, and a known relation per

@@ -41,6 +41,30 @@ func expectEqual<T: Equatable>(
     }
 }
 
+/// Refusing to answer is a result the resolver is *supposed* to produce, so it gets an
+/// expectation of its own — and one that prints what it wrongly matched when it fails.
+func expectNil<T>(
+    _ actual: T?,
+    _ description: String,
+    file: String = #fileID,
+    line: Int = #line
+) async {
+    if actual == nil {
+        await Report.shared.pass()
+    } else {
+        await Report.shared.fail("\(description) — expected nothing, got \(actual!)  (\(file):\(line))")
+    }
+}
+
+func expectNotNil<T>(
+    _ actual: T?,
+    _ description: String,
+    file: String = #fileID,
+    line: Int = #line
+) async {
+    await expect(actual != nil, description, file: file, line: line)
+}
+
 /// Runs one named group of checks, catching anything thrown so a single broken
 /// check can't take the whole run down.
 func check(_ name: String, _ body: () async throws -> Void) async {

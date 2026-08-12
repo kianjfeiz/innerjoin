@@ -169,6 +169,9 @@ public struct Scrutiny: Sendable {
         case "date_order", "dateorder": return "dateOrder"
         case "impossible_date", "invalid_date": return "impossibleDate"
         case "implausible_date": return "implausibleDate"
+        case "typo", "misspelling", "spelling": return "typo"
+        case "inconsistent_format", "format", "formatting", "type_mismatch",
+             "inconsistent_type", "unit_mismatch": return "inconsistentFormat"
         default: return "other"
         }
     }

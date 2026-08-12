@@ -25,12 +25,36 @@ struct Eval {
             return
         }
 
+        // Against a corpus whose faults are written down.
+        if let index = arguments.firstIndex(of: "--errors") {
+            let directory = arguments.count > index + 1 ? arguments[index + 1] : "."
+            try await Errors.run(corpus: directory,
+                                 manifest: directory + "/ERRORS_MANIFEST.md")
+            return
+        }
+
+        // Real names from every naming system, against the matcher alone.
+        if let index = arguments.firstIndex(of: "--names") {
+            let directory = arguments.count > index + 1 ? arguments[index + 1] : "."
+            try Names.run(distinctAt: directory + "/names_distinct.tsv",
+                          variantsAt: directory + "/names_variants.tsv")
+            return
+        }
+
         if arguments.contains("--people") {
             try await runPeople()
             return
         }
 
         if arguments.contains("--real") {
+            // A single run of this corpus is one sample, not a measurement: the model
+            // returns different output for byte-identical requests, seed and all.
+            if let index = arguments.firstIndex(of: "--repeat"),
+               let count = arguments.count > index + 1 ? Int(arguments[index + 1]) : nil,
+               count > 1 {
+                try await runTrials(count: count, settle: !arguments.contains("--no-settle"))
+                return
+            }
             try await runAgainstRealModel(settle: !arguments.contains("--no-settle"))
             return
         }
@@ -109,6 +133,73 @@ struct Eval {
         let spend = await Meter.shared.snapshot()
         print("\n  cost: \(spend.description)")
         if !score.passed { exit(1) }
+    }
+
+    /// The same corpus, several times, reported with its spread.
+    ///
+    /// Necessary rather than thorough. Two consecutive runs of this corpus — same binary,
+    /// same seed, same temperature, nothing changed between them — scored 67% and 83% on
+    /// category purity and 84% and 92% on coverage. Neither number was wrong; a single
+    /// run simply isn't a measurement of anything, and a change judged by one is judged
+    /// by noise. Reporting the spread beside the mean is what makes "this helped"
+    /// something you can check: if the bands overlap, it didn't, or not measurably.
+    ///
+    /// The deterministic benchmarks — `--names`, `--linkage`, `ijcheck` — need none of
+    /// this, which is exactly why the resolver work is measured there.
+    static func runTrials(count: Int, settle: Bool) async throws {
+        let settings = ProviderSettings.fromEnvironment()
+        guard settings.kind != .mock else { print("--real needs a provider."); exit(1) }
+        print("Real model: \(settings.makeProvider().label) · \(count) runs of the same corpus\n")
+
+        var samples: [String: [Double]] = [:]
+        var order: [String] = []
+        func note(_ name: String, _ value: Double) {
+            if samples[name] == nil { order.append(name) }
+            samples[name, default: []].append(value)
+        }
+
+        await Meter.shared.reset()
+        for trial in 1...count {
+            let provider = settings.makeProvider()
+            var report = try await run(noise: 0, mode: settle ? .refined : .learning,
+                                       provider: provider, keepWorkspace: true)
+            if let store = report.store {
+                report.reasoning = try await scoreReasoning(store: store, provider: provider)
+            }
+            note("files read", report.readRate)
+            note("facts preserved", report.factRate)
+            note("entities found", report.entityRecall)
+            note("citations valid", report.citationValidity)
+            note("schema coherence", report.schemaCoherence)
+            note("named from contents", report.namedShare)
+            note("category purity", report.categoryPurity)
+            note("category coverage", report.categoryCoverage)
+            if let reasoning = report.reasoning {
+                note("answers correct", reasoning.accuracy)
+                note("refused correctly", reasoning.refusalRate)
+                note("citations resolve", reasoning.citationValidity)
+            }
+            print("  run \(trial) of \(count) done")
+        }
+
+        print("\n── \(count) runs · mean and spread " + String(repeating: "─", count: 28))
+        print("  \(padded("metric", 22))\(padded("mean", 8))\(padded("worst", 8))\(padded("best", 8))spread")
+        for name in order {
+            let values = samples[name]!
+            let mean = values.reduce(0, +) / Double(values.count)
+            let low = values.min()!, high = values.max()!
+            let flag = high - low >= 0.10 ? "  ← unstable" : ""
+            print("  \(padded(name, 22))\(percent(mean))    \(percent(low))    \(percent(high))"
+                  + "   \(percent(high - low))\(flag)")
+        }
+        let spend = await Meter.shared.snapshot()
+        print("\n  cost: \(spend.description)")
+    }
+
+    private static func percent(_ value: Double) -> String { String(format: "%3.0f%%", value * 100) }
+
+    private static func padded(_ text: String, _ width: Int) -> String {
+        text.count >= width ? text : text + String(repeating: " ", count: width - text.count)
     }
 
     /// One pass of the corpus through whatever model the environment points at, in the

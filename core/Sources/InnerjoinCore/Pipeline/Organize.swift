@@ -398,16 +398,36 @@ public struct Organize: Sendable {
         let kinds = group.compactMap { $0.kind?.trimmed.nilIfEmpty }
         if let kind = mostCommon(kinds),
            !needsSeconding || kinds.filter({ $0 == kind }).count >= 2 {
-            return kind.capitalizedFirst + "s"
+            return plural(of: kind).capitalizedFirst
         }
         // Better an honest holding pen than a confident wrong shelf.
         return holdingCategory
     }
 
+    /// English plurals, to the extent a shelf label needs them.
+    ///
+    /// A bug worth the name: this was `kind + "s"`, so a library of insurance documents
+    /// got a shelf called **"Policys"**. I spent a while blaming the model for that one
+    /// before finding it was written here. A misspelt shelf is not a small thing — it
+    /// sits in the sidebar, in every listing, and it is the first evidence a person has
+    /// about whether this program can be trusted with their filing.
+    public static func plural(of word: String) -> String {
+        let lower = word.lowercased()
+        if lower.hasSuffix("y"), let before = lower.dropLast().last, !"aeiou".contains(before) {
+            return lower.dropLast() + "ies"
+        }
+        if ["s", "x", "z"].contains(where: lower.hasSuffix)
+            || lower.hasSuffix("ch") || lower.hasSuffix("sh") {
+            return lower + "es"
+        }
+        return lower + "s"
+    }
+
     /// When two clusters vote for the same name, name the second for what actually
     /// binds it together.
     static func distinguisher(for group: [Record]) -> String? {
-        mostCommon(group.compactMap { $0.kind?.trimmed.nilIfEmpty }).map { $0.capitalizedFirst + "s" }
+        mostCommon(group.compactMap { $0.kind?.trimmed.nilIfEmpty })
+            .map { plural(of: $0).capitalizedFirst }
     }
 
     static func mostCommon(_ values: [String]) -> String? {

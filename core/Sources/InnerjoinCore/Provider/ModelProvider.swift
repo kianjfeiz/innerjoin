@@ -75,6 +75,19 @@ public enum ProviderError: LocalizedError {
                 "structured_output", "json schema", "response format"]
             .contains { lowered.contains($0) }
     }
+
+    /// A router refusing to route, as opposed to a model refusing to answer.
+    ///
+    /// Asking for an endpoint that honours every parameter we send is only safe when
+    /// every parameter is one the model takes. `openai/gpt-5.6-luna` doesn't list
+    /// `temperature` at all, so the strict ask matched no endpoint and *every* document
+    /// failed with a 404 — a whole library unreadable over a routing preference. The
+    /// request is fine; the insistence is what has to give.
+    public static func isAboutRouting(_ complaint: String) -> Bool {
+        let lowered = complaint.lowercased()
+        return lowered.contains("no endpoints found")
+            || lowered.contains("no allowed providers")
+    }
 }
 
 /// How to reach a model. Keys are never written to the database or the vault — they

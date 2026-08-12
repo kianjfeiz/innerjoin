@@ -208,3 +208,18 @@ private func oneVoteIsNotAVote() async throws {
                      "one document's opinion doesn't name the cluster it's in")
     }
 }
+
+func shelfNameChecks() async {
+    print("\nOrganize · a shelf label a person would accept")
+    await check("plurals are spelt, not concatenated", pluralsAreSpelt)
+}
+
+private func pluralsAreSpelt() async throws {
+    // The one that shipped: a library of insurance documents filed under "Policys".
+    await expectEqual(Organize.plural(of: "policy"), "policies", "consonant before y")
+    await expectEqual(Organize.plural(of: "statement"), "statements", "the ordinary case")
+    await expectEqual(Organize.plural(of: "invoice"), "invoices", "already ends in a vowel")
+    await expectEqual(Organize.plural(of: "receipt"), "receipts", "and the plain one")
+    // A vowel before the y keeps it: journeys, not journies.
+    await expectEqual(Organize.plural(of: "survey"), "surveys", "vowel before y")
+}

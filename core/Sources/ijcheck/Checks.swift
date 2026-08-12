@@ -45,6 +45,7 @@ struct Checks {
         await entityIdentityChecks()
         await staleLinkChecks()
         await organizeChecks()
+        await shelfNameChecks()
         await categoryEvidenceChecks()
         await robustnessChecks()
         await learningChecks()
@@ -57,6 +58,7 @@ struct Checks {
         await scrutinyChecks()
         await typoChecks()
         await writtenFormChecks()
+        await discriminatorChecks()
 
         print("\nGeometry")
         await check("bounding boxes convert from bottom-left origin", geometryConversion)
