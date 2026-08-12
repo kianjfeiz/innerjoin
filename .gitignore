@@ -1,7 +1,8 @@
-.DS_Store
-core/.build/
-core/.swiftpm/
-*.xcuserstate
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.xcuserstate
+.DS_Store
+.build/
+core/.build/
+core/.swiftpm/
