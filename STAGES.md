@@ -1,4 +1,4 @@
-# innerjoin — pipeline stages, build specification
+# dunes — pipeline stages, build specification
 
 _v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure handling, order of work._
 
@@ -11,7 +11,7 @@ _v1 · 2026-08-07. This is the **build spec**: contracts, algorithms, failure ha
 > - **Markdown lives on the document row**, not its own table.
 > - **Migrations are incremental** — v1 covers only `document`, `element`, and FTS. Later stages add their own tables rather than shipping empty ones.
 > - **`DatabasePool`, not `DatabaseQueue`** — the UI must read while ingestion writes.
-> - **Checks run as an executable** (`ijcheck`), because swift-testing and XCTest both need a full Xcode install to link. Revisit when Xcode is installed for the app.
+> - **Checks run as an executable** (`dunescheck`), because swift-testing and XCTest both need a full Xcode install to link. Revisit when Xcode is installed for the app.
 > - **Vision's `RecognizeDocumentsRequest` handles table structure natively**, so no table-recognition work is needed.
 > - **Audio yes, video no** — Speech framework, one element per utterance, timestamps in place of coordinates.
 > - **Entity over-production is gated deterministically** (name must appear in the document, roles and broad places refused, per-document cap, NLTagger corroboration) — see core/README.md.
@@ -527,10 +527,10 @@ Per document, log: stage timings, bytes, page count, element count, token estima
 
 | # | Deliverable | Proves |
 |---|---|---|
-| 1 | Package skeleton, types, schema, migrations, `ijparse` CLI shell | it compiles and the DB opens |
-| 2 | Stage 0 + Stage 1 (text-layer PDF only) → `ijparse doc.pdf --json` | end-to-end spine on day one |
+| 1 | Package skeleton, types, schema, migrations, `dunes` CLI shell | it compiles and the DB opens |
+| 2 | Stage 0 + Stage 1 (text-layer PDF only) → `dunes doc.pdf --json` | end-to-end spine on day one |
 | 3 | Stage 1 images + scanned PDFs via `RecognizeDocumentsRequest` | the coordinate/OCR path, the riskiest parser work |
-| 4 | Stage 2 rendition + anchors → `ijparse doc.pdf --md` | the artifact the model will read |
+| 4 | Stage 2 rendition + anchors → `dunes doc.pdf --md` | the artifact the model will read |
 | 5 | Stage 3 with a **mock** provider, then live | the schema and validation, without burning tokens |
 | 6 | Stage 4 + 5 | the graph and search |
 | 7 | Stage 6 | categories appear without being configured |

@@ -1,4 +1,4 @@
-# innerjoin-core
+# dunes-core
 
 The on-device preprocessor: files in, clean markdown and located elements out.
 No network, no API key, nothing leaves the Mac.
@@ -6,25 +6,25 @@ No network, no API key, nothing leaves the Mac.
 ## Try it
 
 ```bash
-swift run ijparse add ~/Downloads          # read a folder — no key needed
-swift run ijparse list                     # what's in the library
-swift run ijparse show 1                   # a document's markdown
-swift run ijparse find "lease penalty"     # full-text search
-swift run ijcheck                          # run the checks
+swift run dunes add ~/Downloads          # read a folder — no key needed
+swift run dunes list                     # what's in the library
+swift run dunes show 1                   # a document's markdown
+swift run dunes find "lease penalty"     # full-text search
+swift run dunescheck                          # run the checks
 ```
 
 With a model connected, files become records:
 
 ```bash
-swift run ijparse key set anthropic         # paste when prompted — never in your history
-swift run ijparse understand                # everything not yet understood
-swift run ijparse record 1                  # fields, dates, links, with pages
-swift run ijparse upcoming                  # dates read out of your documents
-swift run ijparse who "Osei"                # every file mentioning someone
-swift run ijparse tidy                      # merge duplicates, flag disagreements
-swift run ijparse sort                      # re-derive categories from the graph
-swift run ijparse name                      # what each file is now called, and why
-swift run ijparse graph                     # is the graph healthy or bloating?
+swift run dunes key set anthropic         # paste when prompted — never in your history
+swift run dunes understand                # everything not yet understood
+swift run dunes record 1                  # fields, dates, links, with pages
+swift run dunes upcoming                  # dates read out of your documents
+swift run dunes who "Osei"                # every file mentioning someone
+swift run dunes tidy                      # merge duplicates, flag disagreements
+swift run dunes sort                      # re-derive categories from the graph
+swift run dunes name                      # what each file is now called, and why
+swift run dunes graph                     # is the graph healthy or bloating?
 ```
 
 ## Noticing a document is wrong
@@ -34,11 +34,11 @@ the sum of its lines, "April 45", a delivery recorded before the shipment. Copyi
 faithfully and saying nothing leaves someone to find out the hard way.
 
 ```bash
-swift run ijparse problems         # what doesn't add up, and where
+swift run dunes problems         # what doesn't add up, and where
 ```
 
 **Flag, never fix.** The record keeps the value that is printed, because the value and
-the page it cites have to agree — the moment innerjoin silently corrects a figure, every
+the page it cites have to agree — the moment dunes silently corrects a figure, every
 citation stops meaning what it appears to mean. The objection sits beside the value.
 
 Two sources, deliberately unequal. Anything a rule can decide is decided by a rule,
@@ -74,9 +74,9 @@ said. No model call — it's a pure function of the record, so it's free and giv
 same answer twice. Three rules it holds to:
 
 - **The arrival name is kept.** It's provenance; someone will look for the file by the
-  name they gave it. `ijparse name` shows both.
+  name they gave it. `dunes name` shows both.
 - **Nothing on disk moves.** The original is the user's and the vault copy is addressed
-  by content. `ijparse name --export <folder>` writes *copies* under the new names.
+  by content. `dunes name --export <folder>` writes *copies* under the new names.
 - **Nothing is invented.** No date unless the document states one; no name at all when
   extraction had nothing to say, in which case the file keeps what it arrived with.
 
@@ -104,17 +104,17 @@ Measured on the eval corpus, as a share of field uses landing on one agreed name
 | coherence | 67% | 97% | 97% |
 
 Settling runs automatically at the end of ingestion — it only re-reads the minority
-that disagree, so it's a small fraction of extra calls. `ijparse settle` runs it by hand.
+that disagree, so it's a small fraction of extra calls. `dunes settle` runs it by hand.
 
 ## Measuring it
 
 ```bash
-swift run ijcheck    # 328 checks, deterministic, no key
-swift run ijeval     # score the pipeline against a known-truth corpus
+swift run dunescheck    # 328 checks, deterministic, no key
+swift run duneseval     # score the pipeline against a known-truth corpus
 ```
 
-`ijeval --real` runs the same corpus through whatever model you've connected, and
-reports accuracy *and* cost. `ijeval` alone builds twenty-two documents across four areas of a life, in six formats,
+`duneseval --real` runs the same corpus through whatever model you've connected, and
+reports accuracy *and* cost. `duneseval` alone builds twenty-two documents across four areas of a life, in six formats,
 plus three deliberately broken files — then runs them through a *simulated* model at
 0%, 40% and 90% error. The point isn't the score with a perfect model; it's how
 gently the numbers fall as the model gets worse, because that decay is the part we
@@ -171,7 +171,7 @@ the same page twice names a slightly different set. No threshold fixes an input 
 moves.
 
 What fixed it was a **second, independent signal**: plain TF-IDF cosine similarity
-between the documents themselves ([Similarity.swift](Sources/InnerjoinCore/Pipeline/Similarity.swift)).
+between the documents themselves ([Similarity.swift](Sources/DunesCore/Pipeline/Similarity.swift)).
 Two rent invoices from the same landlord read alike whether or not extraction remembered
 to name him. Words don't change between readings. It's weighted below a shared name —
 a name is direct evidence, shared vocabulary is circumstantial — so it holds a cluster
@@ -199,8 +199,8 @@ to $3,395 from July 2026, and a renewal. There is no single answer, and scoring 
 correct was measuring my own carelessness. The question is now specific, and the conflict
 gets a question of its own.
 
-Workspaces live at `~/Library/Application Support/innerjoin/Personal` by default;
-`-w <path>` picks another. A workspace is one folder: `innerjoin.sqlite` plus a
+Workspaces live at `~/Library/Application Support/dunes/Personal` by default;
+`-w <path>` picks another. A workspace is one folder: `dunes.sqlite` plus a
 `files/` vault of originals.
 
 ## What runs
@@ -217,7 +217,7 @@ Workspaces live at `~/Library/Application Support/innerjoin/Personal` by default
 | 6 · organize | categories from graph clusters, named by extraction's own votes | — | no |
 | refine | re-read the documents that describe things unlike their peers | the user's model | **yes** |
 
-Stages 0–2 never touch the network, so innerjoin is a searchable library before any
+Stages 0–2 never touch the network, so dunes is a searchable library before any
 model is connected; understanding backfills later. Everything after Stage 3 is
 arithmetic and SQL over what's already stored — see [../STAGES.md](../STAGES.md).
 Embeddings (5b) are deliberately not built: they're gated on a query that demonstrably
@@ -228,16 +228,16 @@ fails full-text search.
 Any model, your key. Naming a known service is enough — the address comes with it:
 
 ```bash
-swift run ijparse key set openrouter    # paste the key when prompted
-swift run ijparse understand --provider openrouter --model deepseek/deepseek-chat
+swift run dunes key set openrouter    # paste the key when prompted
+swift run dunes understand --provider openrouter --model deepseek/deepseek-chat
 ```
 
 `anthropic` speaks the Messages API; `openai`, `openrouter`, `groq`, `together`,
 `deepseek`, `ollama` and `lmstudio` all speak OpenAI's chat-completions dialect, which
-covers most of the world including fully local models — so innerjoin can run end to end
-with nothing leaving the machine at all. Anything else: `IJ_BASE_URL`.
+covers most of the world including fully local models — so dunes can run end to end
+with nothing leaving the machine at all. Anything else: `DUNES_BASE_URL`.
 
-Keys are read from `IJ_API_KEY` or the login keychain, and are never written to the
+Keys are read from `DUNES_API_KEY` or the login keychain, and are never written to the
 database, the vault, or your shell history.
 
 One wrinkle worth knowing: a router fronts dozens of models and only some accept a JSON
@@ -291,7 +291,7 @@ downstream has to think about it.
   A page that's mostly headings would otherwise decide heading size was normal.
 - **Anchors go on facts**, not every paragraph: tables, and text containing a date,
   amount, or number. Anchoring everything wastes tokens and dilutes attention.
-- **Checks run as an executable** (`swift run ijcheck`) rather than a test target,
+- **Checks run as an executable** (`swift run dunescheck`) rather than a test target,
   because swift-testing and XCTest both need a full Xcode install to link. Worth
   revisiting once Xcode is installed for the app.
 
@@ -345,7 +345,7 @@ Refusals are reported, never silent — `understand --verbose` lists each one wi
 reason, because a rising refusal count is how you notice a prompt going wrong.
 
 ```bash
-swift run ijparse graph        # is the graph healthy or bloating?
+swift run dunes graph        # is the graph healthy or bloating?
 ```
 
 Two numbers matter. **Singletons** (entities touching exactly one record) are the

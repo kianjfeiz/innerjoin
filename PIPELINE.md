@@ -1,4 +1,4 @@
-# innerjoin — ingestion pipeline research
+# dunes — ingestion pipeline research
 
 _Written 2026-08-07. How Unstructured works, what to copy, and the stages they don't have._
 
@@ -23,7 +23,7 @@ Four tables, and that is the entire model:
 | Table | One row per | Holds |
 |---|---|---|
 | `documents` | file you dropped | path, hash, type, page count, ingested-at |
-| `records` | what innerjoin understood | category, title, markdown body, fields JSON, summary |
+| `records` | what dunes understood | category, title, markdown body, fields JSON, summary |
 | `entities` | person / place / org seen across records | name, kind, merged aliases |
 | `links` | relationship | `(src, rel, dst)` — record↔entity, record↔record |
 
@@ -55,7 +55,7 @@ idx_category   ON records(category)             -- sidebar + tables
 embeddings     (record_id, vec BLOB)            -- semantic recall, added later
 ```
 
-A vector index answers exactly one question well: *what is semantically similar to this?* But most of innerjoin isn't that question. "What expires in the next 90 days" is a date range. "Everything about 1247 Fillmore" is a join. "Total spent this year" is an aggregation. "Sorted by amount" is an ORDER BY. Today, dossiers, and tables are all SQL; only free-text ⌘K wants vectors. Making the vector store primary would mean reimplementing the relational parts badly on top of it.
+A vector index answers exactly one question well: *what is semantically similar to this?* But most of dunes isn't that question. "What expires in the next 90 days" is a date range. "Everything about 1247 Fillmore" is a join. "Total spent this year" is an aggregation. "Sorted by amount" is an ORDER BY. Today, dossiers, and tables are all SQL; only free-text ⌘K wants vectors. Making the vector store primary would mean reimplementing the relational parts badly on top of it.
 
 **Elements are scaffolding, not a layer.** The typed element list from Stage 1 exists so the parser knows *where on the page* each piece of text came from. Its output survives as two things — the markdown body, and a page+bbox stamp on each extracted field — then it's a cached artifact, not a concept the app or the user ever sees. Cache it (re-OCR is expensive), don't model the product around it.
 
@@ -123,7 +123,7 @@ After partitioning they group elements into chunks: `basic` (fill to `max_charac
 
 ---
 
-## Part 2 — The innerjoin pipeline
+## Part 2 — The dunes pipeline
 
 Stages 0–2 mirror Unstructured. Stages 3–5 are the product.
 
@@ -285,4 +285,4 @@ FTS5 over rendition + record text + summary, structured columns for dates/amount
 | Metadata schema, esp. `coordinates`, `parent_id`, `category_depth` | `auto` fallback chain | Layout-detection + table-transformer models (months of work; the VLM path covers it) |
 | Stable `element_id` hashing | Per-page splitting for large docs | Python runtime, Tesseract, poppler, ONNX — the multi-GB dependency tail |
 
-**The one-line summary:** Unstructured turns documents into clean text. innerjoin turns clean text into linked facts. Stages 0–2 are theirs and worth copying closely; Stage 3 onward is the actual product and has no counterpart in their system.
+**The one-line summary:** Unstructured turns documents into clean text. dunes turns clean text into linked facts. Stages 0–2 are theirs and worth copying closely; Stage 3 onward is the actual product and has no counterpart in their system.

@@ -10,29 +10,29 @@
 # variables, so this distinction matters:
 #
 #   ./run.sh                          the real library
-#   IJ_WORKSPACE=/tmp/w ./run.sh      a different library
-#   IJ_STATE=loading ./run.sh         any harness state — see Harness in InnerjoinApp
-#   IJ_TODAY=2026-08-10 ./run.sh      a pinned clock
-#   IJ_APPEARANCE=dark ./run.sh       force an appearance, this process only
+#   DUNES_WORKSPACE=/tmp/w ./run.sh      a different library
+#   DUNES_STATE=loading ./run.sh         any harness state — see Harness in DunesApp
+#   DUNES_TODAY=2026-08-10 ./run.sh      a pinned clock
+#   DUNES_APPEARANCE=dark ./run.sh       force an appearance, this process only
 set -euo pipefail
 cd "$(dirname "$0")"
 
 CONFIG="${CONFIG:-debug}"
-APP=".build/Innerjoin.app"
+APP=".build/dunes.app"
 
-swift build -c "$CONFIG" --product Innerjoin
+swift build -c "$CONFIG" --product dunes-app
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-cp ".build/$CONFIG/Innerjoin" "$APP/Contents/MacOS/Innerjoin"
+cp ".build/$CONFIG/dunes-app" "$APP/Contents/MacOS/dunes-app"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
 # Ad-hoc signature. Unsigned bundles get killed on launch on Apple silicon.
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 
 # Kill a previous run so the loop is one command, not two.
-pkill -x Innerjoin 2>/dev/null || true
+pkill -x dunes-app 2>/dev/null || true
 sleep 0.2
 
-"$APP/Contents/MacOS/Innerjoin" &
-echo "running · pid $! · workspace=${IJ_WORKSPACE:-default} · state=${IJ_STATE:-live}"
+"$APP/Contents/MacOS/dunes-app" &
+echo "running · pid $! · workspace=${DUNES_WORKSPACE:-default} · state=${DUNES_STATE:-live}"

@@ -1,8 +1,8 @@
-# innerjoin — people, and remembering them
+# dunes — people, and remembering them
 
 _v1 · 2026-08-10. The build spec for identity, memory, and recall._
 
-Everything else in innerjoin reads documents. This reads *people* out of them, and keeps
+Everything else in dunes reads documents. This reads *people* out of them, and keeps
 what it learns.
 
 The test: **"Joanna" and "J. Ramirez" and "Joanna R." are one person, she works at Acme,
@@ -216,7 +216,7 @@ a person, so identity is resolved *before* retrieval runs.
 
 ## 6. What gets measured
 
-Extended `ijeval`, scored like everything else:
+Extended `duneseval`, scored like everything else:
 
 - **person recall** — one person in five surface forms across seven documents resolves to
   one identity
@@ -230,7 +230,7 @@ Extended `ijeval`, scored like everything else:
 
 ### Against real names, from every naming system
 
-`ijeval --names` scores the matcher against names drawn from Wikidata, where the truth is
+`duneseval --names` scores the matcher against names drawn from Wikidata, where the truth is
 real rather than invented: a differing Q-number is a different person, and an `altLabel` is
 a name the same person is genuinely known by. 753,083 pairs across eleven naming systems —
 Han, kana, Cyrillic, Arabic, Spanish double surnames, Icelandic patronymics, Dutch
@@ -298,20 +298,20 @@ A one-line question does come back identical, which is what makes the promise so
 believe. The provider returns no `system_fingerprint`, so there isn't even a way to notice
 when the machine underneath changes.
 
-So a single run is one sample. `ijeval --real --repeat N` reports mean and spread, and a
+So a single run is one sample. `duneseval --real --repeat N` reports mean and spread, and a
 change is only believable when the bands separate. Across four runs of the corpus, ten of
 eleven metrics were pinned at 100% with zero spread; **category purity was the only
 unstable one**, at 67–81%. That is where the variance lives, and knowing that is worth
 more than any single run's number.
 
-The deterministic benchmarks — `--names`, `--linkage`, `ijcheck` — have none of this
+The deterministic benchmarks — `--names`, `--linkage`, `dunescheck` — have none of this
 problem, which is exactly why the resolver work is measured there and the numbers above
 are exact.
 
 ### Against the identity corpus
 
 
-`ijeval --people` runs a corpus built to break resolution: one person in four spellings,
+`duneseval --people` runs a corpus built to break resolution: one person in four spellings,
 a second person sharing her surname, a nickname, a job change, and a known relation per
 document. Ingested one file at a time, in order, because order is part of what's tested.
 
@@ -350,7 +350,7 @@ Five defects came out of it, each found by a number moving rather than by inspec
 
 ### Against the published benchmark
 
-`ijeval --linkage` scores name matching on **FEBRL**, the standard public test set for
+`duneseval --linkage` scores name matching on **FEBRL**, the standard public test set for
 person record linkage — synthetic people carrying the errors real data carries, with
 ground-truth duplicates. 5,792 labelled pairs, half of the negatives sharing a surname so
 the test isn't trivial. The comparison is fair on information: FEBRL's own labels use

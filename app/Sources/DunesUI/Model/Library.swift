@@ -1,0 +1,234 @@
+import Foundation
+import DunesCore
+
+/// The engine, adapted to a small window.
+///
+/// Every list this returns is a query against the real library — the same `Store` the CLI
+/// writes. Nothing here is invented: people come from the entity graph, files from the
+/// document table, and an answer from `Ask`, which refuses to say anything it can't cite.
+final class Library: @unchecked Sendable {
+    let workspace: URL
+
+    init(workspace: URL = Library.defaultWorkspace) {
+        self.workspace = workspace
+    }
+
+    /// The same folder the CLI writes, so `dunes add` and this app are two views of one
+    /// library rather than two libraries.
+    static var defaultWorkspace: URL {
+        if let override = ProcessInfo.processInfo.environment["DUNES_WORKSPACE"] {
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
+        }
+        return URL(fileURLWithPath: ("~/Library/Application Support/dunes/Personal" as NSString)
+            .expandingTildeInPath)
+    }
+
+    /// One `Store` for the app's lifetime, opened once behind a lock.
+    ///
+    /// Learned the hard way: two concurrent opens race the schema migrator and SQLite
+    /// returns "database is locked". `Store` is built for concurrent *use*; it's
+    /// concurrent *opening* that has to happen exactly once.
+    private let lock = NSLock()
+    private var cached: Store?
+
+    private func open() throws -> Store {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cached { return cached }
+        let store = try Store(root: workspace)
+        cached = store
+        return store
+    }
+
+    // MARK: - What the panel shows
+
+    /// A row in any of the browse lists. One shape for people, files and sources, so the
+    /// list view never has to know which it's drawing.
+    struct Row: Identifiable, Hashable, Sendable {
+        let id: String
+        let title: String
+        let detail: String?
+        let symbol: String
+        /// The question tapping this row asks. Every row is a way into the conversation
+        /// rather than a dead end.
+        let question: String
+    }
+
+    struct Snapshot: Sendable {
+        var documents = 0
+        var people = 0
+        /// Things the library noticed that have a date or a contradiction attached —
+        /// used for the prompts under the field, so they're real rather than canned.
+        var prompts: [String] = []
+        var isEmpty: Bool { documents == 0 }
+    }
+
+    func snapshot() async throws -> Snapshot {
+        let store = try open()
+        var snapshot = Snapshot()
+        snapshot.documents = try store.counts().documents
+        guard snapshot.documents > 0 else { return snapshot }
+        snapshot.people = try store.graphHealth().entities
+
+        // Prompts are derived, never written by hand: a real deadline, a real
+        // contradiction, a real name that keeps recurring.
+        var prompts: [String] = []
+        if let due = try store.upcoming(withinDays: 60).first {
+            prompts.append("What happens with \(due.record.title)?")
+        }
+        if let flagged = try store.flagged(limit: 1).first {
+            prompts.append("What doesn't add up in \(flagged.document.label)?")
+        }
+        if let hub = try store.graphHealth().hubs.first {
+            prompts.append("What do I have about \(hub.name)?")
+        }
+        snapshot.prompts = Array(prompts.prefix(3))
+        return snapshot
+    }
+
+    func people() async throws -> [Row] {
+        let store = try open()
+        return try store.entities(limit: 200)
+            .filter { $0.kind == .person || $0.kind == .org }
+            .map { entity in
+                Row(
+                    id: "e\(entity.id ?? 0)",
+                    title: entity.label,
+                    detail: entity.kind == .person ? "Person" : "Organization",
+                    symbol: entity.kind == .person ? "person" : "building.2",
+                    question: "What do I have about \(entity.label)?"
+                )
+            }
+    }
+
+    func files() async throws -> [Row] {
+        let store = try open()
+        return try store.allDocuments()
+            .sorted { $0.addedAt > $1.addedAt }
+            .map { document in
+                let title = document.id
+                    .flatMap { try? store.record(ofDocument: $0)?.title } ?? document.label
+                return Row(
+                    id: "d\(document.id ?? 0)",
+                    title: title,
+                    detail: document.stage == .understood ? "Understood" : "Read",
+                    symbol: "doc",
+                    question: "What is \(title) about?"
+                )
+            }
+    }
+
+    /// What the library is watching: dated things and contradictions. This is the closest
+    /// thing to the old briefing, kept because it's the most valuable thing the engine
+    /// produces on its own.
+    func watching() async throws -> [Row] {
+        let store = try open()
+        var rows: [Row] = []
+
+        for hit in try store.upcoming(withinDays: 120).prefix(6) {
+            rows.append(Row(
+                id: "u\(hit.date.id ?? 0)",
+                title: hit.record.title,
+                detail: "\(readable(hit.date.kind)) · \(Self.shortDate(hit.date.date))"
+                    + (hit.date.derived ? " · worked out" : ""),
+                symbol: "calendar",
+                question: "What happens with \(hit.record.title), and when?"
+            ))
+        }
+        for entry in try store.flagged(limit: 6) {
+            guard let anomaly = entry.anomalies.first else { continue }
+            rows.append(Row(
+                id: "a\(anomaly.id ?? 0)",
+                title: anomaly.detail,
+                detail: entry.document.label,
+                symbol: "exclamationmark.triangle",
+                question: "What doesn't add up in \(entry.document.label)?"
+            ))
+        }
+        return rows
+    }
+
+    // MARK: - Answering
+
+    /// A question, narrated as it runs. The narration is real — the counts are the
+    /// actual counts and the documents are the ones retrieval actually read.
+    func answer(_ question: String) -> AsyncThrowingStream<Chunk, Error> {
+        AsyncThrowingStream { continuation in
+            let work = Task {
+                do {
+                    let store = try open()
+                    let count = try store.counts().documents
+                    continuation.yield(.working("Searching \(count) file\(count == 1 ? "" : "s")"))
+
+                    let settings = Self.providerSettings()
+                    guard settings.apiKey?.isEmpty == false else {
+                        continuation.yield(.text(
+                            "No model is connected, so I can search but not answer.\n\n"
+                            + "Add a key in Terminal with `dunes key set openrouter`, then ask again."))
+                        continuation.yield(.done)
+                        continuation.finish()
+                        return
+                    }
+
+                    let asker = Ask(store: store, provider: settings.makeProvider())
+                    let answer = try await asker.answer(question)
+
+                    if !answer.consulted.isEmpty {
+                        continuation.yield(.working(
+                            "Reading \(answer.consulted.count) document\(answer.consulted.count == 1 ? "" : "s")"))
+                    }
+                    continuation.yield(.text(answer.text))
+                    for citation in answer.citations {
+                        continuation.yield(.citation(
+                            Citation(tag: citation.elementTag,
+                                     document: citation.documentLabel,
+                                     quote: citation.quote)))
+                    }
+                    continuation.yield(.done)
+                } catch {
+                    continuation.yield(.text("That didn't work: \(error.localizedDescription)"))
+                    continuation.yield(.done)
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in work.cancel() }
+        }
+    }
+
+    enum Chunk: Sendable {
+        case working(String)
+        case text(String)
+        case citation(Citation)
+        case done
+    }
+
+    struct Citation: Identifiable, Hashable, Sendable {
+        let id = UUID()
+        let tag: String
+        let document: String
+        let quote: String
+    }
+
+    /// The environment wins, so the harness can point at any model; otherwise the one the
+    /// engine is currently tuned against. A Settings surface replaces this default later.
+    private static func providerSettings() -> ProviderSettings {
+        var environment = ProcessInfo.processInfo.environment
+        if environment["DUNES_PROVIDER"] == nil {
+            environment["DUNES_PROVIDER"] = "openrouter"
+            environment["DUNES_MODEL"] = environment["DUNES_MODEL"] ?? "openai/gpt-5.6-luna"
+        }
+        return ProviderSettings.fromEnvironment(environment)
+    }
+
+    private func readable(_ kind: String) -> String {
+        let words = kind.replacingOccurrences(of: "_", with: " ")
+        return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
+    static func shortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.string(from: date)
+    }
+}
