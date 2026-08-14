@@ -87,6 +87,14 @@ enum Prompt {
         rent_monthly, invoice_number, policy_number, due_date, vendor.
         - `title` names the document as a person would refer to it, not the filename.
         - `summary` is one or two sentences, plain and specific.
+        - Record every date that asks something of the reader, not only the formal \
+        ones. A mail proposing a call on Thursday, a note saying an answer is needed \
+        by Friday, an invitation, a delivery date, a date somebody committed to — all \
+        of these are dates. Name the kind in the document's own words: meeting, call, \
+        interview, reply_by, follow_up, payment_due, delivery, start, term_end, \
+        renewal, notice_deadline. Dates that merely record what already happened — \
+        signed, issued, sent, paid — are still worth capturing, and are named that way \
+        so they are not mistaken for things left to do.
         - Every entity needs a `relation` saying what it is to this document, not just \
         that it appears in it:
             party_to    — a signatory or counterparty: a tenant, a lessor, a contractor
@@ -244,7 +252,7 @@ enum Prompt {
                 "items": [
                     "type": "object",
                     "properties": [
-                        "kind": ["type": "string", "description": "term_end, expires, due, renewal, signed…"],
+                        "kind": ["type": "string", "description": "What the date is, in the document's own words. Things still to do: due, term_end, expires, renewal, notice_deadline, payment_due, meeting, call, interview, reply_by, follow_up, delivery, start. Things already done: signed, issued, sent, paid, received."],
                         "date": ["type": "string", "description": "YYYY-MM-DD."],
                         "source": ["type": "string"],
                     ],

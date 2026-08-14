@@ -248,6 +248,23 @@ public final class Store: Sendable {
             try db.create(indexOn: "anomaly", columns: ["documentID"])
         }
 
+        // v9 — what the reader decided, as opposed to what the documents said.
+        //
+        // Its own table, and the only one a person writes to. Records are rewritten
+        // every time a document is understood again, so a "done" flag living on one
+        // would be erased by the next pass — and a task list that forgets what you
+        // finished is worse than no task list. The key is content-derived (see
+        // `Commitment.id`), so it survives that rewrite by not depending on any row id.
+        m.registerMigration("v9_task_state") { db in
+            try db.create(table: "taskState") { t in
+                t.primaryKey("key", .text)
+                t.column("doneAt", .datetime)
+                t.column("snoozedUntil", .datetime)
+                t.column("decidedAt", .datetime).notNull()
+            }
+            try db.create(indexOn: "taskState", columns: ["doneAt"])
+        }
+
         return m
     }
 
@@ -652,6 +669,76 @@ public final class Store: Sendable {
             return dates.compactMap { date in
                 byID[date.recordID].map { (date, $0) }
             }
+        }
+    }
+
+    /// Dates in a window that may open *behind* today.
+    ///
+    /// `upcoming` starts at now, which is right for a briefing and wrong for an agenda:
+    /// the deadline you missed last week is the most important row on the screen, not
+    /// one that vanishes. This is the same query with the floor let out.
+    public func dated(from: Date, to: Date) throws -> [(date: RecordDate, record: Record)] {
+        try dbQueue.read { db in
+            let dates = try RecordDate
+                .filter(RecordDate.Columns.date >= from && RecordDate.Columns.date <= to)
+                .order(RecordDate.Columns.date)
+                .fetchAll(db)
+            let records = try Record.fetchAll(db, keys: Set(dates.map(\.recordID)))
+            let byID = Dictionary(records.compactMap { record in
+                record.id.map { ($0, record) }
+            }, uniquingKeysWith: { first, _ in first })
+            return dates.compactMap { date in byID[date.recordID].map { (date, $0) } }
+        }
+    }
+
+    // MARK: - What the reader decided
+
+    /// Every decision a person has made, by commitment key.
+    public func taskStates() throws -> [String: TaskState] {
+        try dbQueue.read { db in
+            let states = try TaskState.fetchAll(db)
+            return Dictionary(states.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+    }
+
+    /// Mark a commitment finished, or put it back. Idempotent, and safe to call for a
+    /// key that has never been seen — the row is created on demand.
+    public func setTaskDone(key: String, done: Bool, at when: Date = Date()) throws {
+        try dbQueue.write { db in
+            var state = try TaskState.fetchOne(db, key: key) ?? TaskState(key: key)
+            state.doneAt = done ? when : nil
+            state.decidedAt = when
+            // Finishing something clears a snooze: the reason to hide it is gone.
+            if done { state.snoozedUntil = nil }
+            try state.save(db)
+        }
+    }
+
+    /// Set something aside until a date. Clearing it takes `nil`.
+    public func setTaskSnoozed(key: String, until: Date?, at when: Date = Date()) throws {
+        try dbQueue.write { db in
+            var state = try TaskState.fetchOne(db, key: key) ?? TaskState(key: key)
+            state.snoozedUntil = until
+            state.decidedAt = when
+            try state.save(db)
+        }
+    }
+
+    /// Decisions about commitments no document produces any more, so a library that is
+    /// re-read for years doesn't accumulate a shadow of dead keys.
+    @discardableResult
+    public func forgetTaskStates(keeping live: Set<String>) throws -> Int {
+        try dbQueue.write { db in
+            let all = try TaskState.fetchAll(db)
+            var removed = 0
+            for state in all where !live.contains(state.key) {
+                // Only prune what was never finished. A completed thing is a record of
+                // what a person did, and is worth more than the space it costs.
+                guard state.doneAt == nil else { continue }
+                try state.delete(db)
+                removed += 1
+            }
+            return removed
         }
     }
 

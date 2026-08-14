@@ -8,7 +8,7 @@ struct IJParse: AsyncParsableCommand {
         commandName: "dunes",
         abstract: "dunes's on-device preprocessor — read files into markdown and elements.",
         subcommands: [Add.self, Show.self, List.self, Find.self,
-                      Understand.self, Record.self, Upcoming.self, Who.self,
+                      Understand.self, Record.self, Upcoming.self, Tasks.self, Who.self,
                       Graph.self, Tidy.self, Sort.self, Settle.self, Name.self,
                       Ask.self, Problems.self, Key.self],
         defaultSubcommand: Add.self
@@ -329,6 +329,58 @@ struct Upcoming: AsyncParsableCommand {
             print("\(Record.day(date.date))  \(String(away).padded(4))d \(mark) \(date.kind.padded(18)) \(record.title)")
         }
         print("\n\(items.count) upcoming · \"·\" means dunes worked it out")
+    }
+}
+
+// MARK: - tasks
+
+struct Tasks: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "What your files are waiting on you for. Check things off by number.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Option(help: "How far ahead to look.") var days: Int = 365
+    @Option(help: "How far back to keep showing what slipped.") var back: Int = 120
+    @Flag(help: "Include what you've already finished.") var all = false
+    @Option(help: "Finish the task at this number, as listed.") var done: Int?
+    @Option(help: "Put a finished task back, by number. Use with --all.") var undo: Int?
+
+    mutating func run() async throws {
+        let store = try workspace.open()
+        let agenda = Agenda(lookBackDays: back, lookAheadDays: days, includeSettled: all)
+        var items = try agenda.items(store: store)
+
+        if let index = done ?? undo {
+            guard items.indices.contains(index - 1) else {
+                throw ValidationError("No task \(index). There are \(items.count).")
+            }
+            let item = items[index - 1]
+            try store.setTaskDone(key: item.id, done: done != nil)
+            print("\(done != nil ? "Done" : "Back") · \(item.title)")
+            items = try agenda.items(store: store)
+        }
+
+        guard !items.isEmpty else {
+            print(all ? "Nothing here yet." : "Nothing waiting on you.")
+            return
+        }
+
+        var horizon: Commitment.Horizon?
+        for (index, item) in items.enumerated() {
+            let this = item.horizon()
+            if this != horizon {
+                print("\n\(this.title.uppercased())")
+                horizon = this
+            }
+            let when = item.due.map(Record.day) ?? "     —    "
+            let mark = item.isDone ? "x" : " "
+            let note = item.derived ? " ·" : "  "
+            print("[\(mark)] \(String(index + 1).padded(3)) \(when)\(note) "
+                + "\(item.kind.label.padded(9)) \(item.title)")
+        }
+        let open = items.filter { !$0.isDone }.count
+        print("\n\(open) waiting · \"·\" means dunes worked it out"
+            + " · finish one with `dunes tasks --done <n>`")
     }
 }
 

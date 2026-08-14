@@ -60,6 +60,9 @@ struct Checks {
         await writtenFormChecks()
         await discriminatorChecks()
 
+        print("\nAgenda")
+        await agendaChecks()
+
         print("\nGeometry")
         await check("bounding boxes convert from bottom-left origin", geometryConversion)
 
