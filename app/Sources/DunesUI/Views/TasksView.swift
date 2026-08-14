@@ -16,9 +16,42 @@ struct TasksView: View {
     /// pointer for no reason a person could see.
     @State private var now = Date()
 
-    private var groups: [(horizon: Commitment.Horizon, items: [Commitment])] {
+    /// The list flattened into the order it is read in — headings and rows in one
+    /// sequence, each carrying its place in that order.
+    ///
+    /// Flat rather than nested because the entrance is a cascade down the whole list: a
+    /// row has to know where it falls against *everything* above it, and a row two
+    /// ForEaches deep only knows its place among its siblings. Nesting is why the
+    /// headings used to stagger while the rows under them all landed at once.
+    private struct Line: Identifiable {
+        enum Content {
+            case heading(Commitment.Horizon, count: Int)
+            case row(Commitment)
+        }
+        let id: String
+        let content: Content
+        let order: Int
+    }
+
+    private var lines: [Line] {
         let buckets = Dictionary(grouping: model.tasks) { $0.horizon(now: now) }
-        return buckets.keys.sorted().map { ($0, buckets[$0] ?? []) }
+        var lines: [Line] = []
+        for horizon in buckets.keys.sorted() {
+            let items = buckets[horizon] ?? []
+            lines.append(Line(id: "h:\(horizon.rawValue)",
+                              content: .heading(horizon, count: items.count),
+                              order: lines.count))
+            for item in items {
+                lines.append(Line(id: item.id, content: .row(item), order: lines.count))
+            }
+        }
+        return lines
+    }
+
+    /// When a line lands. Capped, so a long list still finishes dealing itself out in
+    /// about half a second rather than trailing on past the point of interest.
+    private func lands(_ order: Int) -> Double {
+        Glass.Motion.lead + Double(min(order, 9)) * Glass.Motion.stagger
     }
 
     var body: some View {
@@ -31,27 +64,31 @@ struct TasksView: View {
             } else {
                 ScrollOrStack {
                     VStack(alignment: .leading, spacing: Glass.Space.tight) {
-                        ForEach(Array(groups.enumerated()), id: \.element.horizon) { index, group in
-                            Section {
-                                ForEach(group.items) { item in
-                                    TaskRow(
-                                        item: item,
-                                        now: now,
-                                        settling: model.settling.contains(item.id),
-                                        finish: { model.finish(item) },
-                                        ask: { model.ask(question(for: item)) },
-                                        snooze: { model.snooze(item, until: $0) }
-                                    )
-                                    // Collapsing upward as it leaves is what makes the
-                                    // rows below close the gap rather than jump into it.
-                                    .transition(.asymmetric(
-                                        insertion: .opacity,
-                                        removal: .scale(scale: 0.96, anchor: .leading)
-                                            .combined(with: .opacity)))
-                                }
-                            } header: {
-                                GroupHeader(horizon: group.horizon, count: group.items.count)
-                                    .arrives(min(index, 4))
+                        ForEach(lines) { line in
+                            switch line.content {
+                            case .heading(let horizon, let count):
+                                GroupHeader(horizon: horizon, count: count)
+                                    .arrives(after: lands(line.order))
+                            case .row(let item):
+                                TaskRow(
+                                    item: item,
+                                    now: now,
+                                    settling: model.settling.contains(item.id),
+                                    finish: { model.finish(item) },
+                                    ask: { model.ask(question(for: item)) },
+                                    snooze: { model.snooze(item, until: $0) }
+                                )
+                                // Insertion is `.identity` on purpose: the row stages
+                                // its own entrance just below, and a fade laid over
+                                // that is a second animation on the same moment —
+                                // which is what made arriving here look stepped.
+                                // Collapsing as it leaves is what makes the rows below
+                                // close the gap rather than jump into it.
+                                .transition(.asymmetric(
+                                    insertion: .identity,
+                                    removal: .scale(scale: 0.96, anchor: .leading)
+                                        .combined(with: .opacity)))
+                                .arrives(after: lands(line.order))
                             }
                         }
                     }
@@ -64,8 +101,10 @@ struct TasksView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Only what leaves is animated from here. Arrivals are timed by the lines
+        // themselves, and animating the same change twice is how a cascade turns into
+        // a lurch.
         .animation(Glass.Motion.settleRow, value: model.tasks)
-        .animation(Glass.Motion.arrive, value: model.loadingRows)
         .safeAreaInset(edge: .bottom, spacing: Glass.Space.tight) {
             if let undoable = model.undoable {
                 UndoBar(title: undoable.title) { model.undoFinish() }

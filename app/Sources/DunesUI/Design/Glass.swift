@@ -133,6 +133,13 @@ enum Glass {
         /// things that appear.
         static let settleRow = Animation.smooth(duration: 0.36)
         static let stagger: Double = 0.045
+        /// The beat a list waits before it starts landing.
+        ///
+        /// Opening a scope grows the panel, and content that begins arriving while the
+        /// window is still resizing looks shaken into place rather than dealt out. This
+        /// is long enough for the old view to be gone and the morph to be under way,
+        /// short enough that nothing feels withheld.
+        static let lead: Double = 0.14
 
         /// One branch of the panel handing off to another. The leaver fades in place
         /// and carries its own timing, so it needs nothing from the transaction; the
