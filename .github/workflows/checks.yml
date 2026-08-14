@@ -38,10 +38,24 @@ jobs:
         run: swift build --product dunescheck
 
       # The harness exits non-zero when anything fails, and prints the failures, so
-      # this is the whole gate.
+      # this is the whole gate. The failures are also re-emitted as workflow errors,
+      # which puts them on the commit as annotations — readable without digging into a
+      # log, and readable at all without admin rights on the repository.
       - name: Checks
         working-directory: core
-        run: swift run dunescheck
+        run: |
+          set -o pipefail
+          swift run dunescheck 2>&1 | tee /tmp/checks.txt || status=$?
+          grep -E '✗' /tmp/checks.txt | while IFS= read -r line; do
+            echo "::error title=check failed::${line#*✗ }"
+          done
+          {
+            echo "### Checks"
+            echo '```'
+            grep -E '✗|checks passed' /tmp/checks.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "${status:-0}"
 
       # A library the CLI can drive end to end, with no model involved: adding files,
       # reading them, and the agenda built out of what came back. Catches the class of
