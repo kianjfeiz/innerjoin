@@ -47,19 +47,24 @@ jobs:
         # of. Named rather than silently tolerated: the run prints what it skipped.
         env:
           DUNES_CHECKS_WITHOUT: speech
+        # Every grep here is guarded. The step runs under `bash -e`, where a grep that
+        # finds nothing exits 1 — so an unguarded "did anything fail?" fails the build
+        # precisely when nothing did, which is how this step first went red on a run
+        # whose checks had all passed.
         run: |
           set -o pipefail
+          status=0
           swift run dunescheck 2>&1 | tee /tmp/checks.txt || status=$?
           grep -E '✗' /tmp/checks.txt | while IFS= read -r line; do
             echo "::error title=check failed::${line#*✗ }"
-          done
+          done || true
           {
             echo "### Checks"
             echo '```'
-            grep -E '✗|checks passed' /tmp/checks.txt || true
+            grep -E '✗|–|checks passed' /tmp/checks.txt || echo "no summary line found"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          exit "${status:-0}"
+          exit "$status"
 
       # A library the CLI can drive end to end, with no model involved: adding files,
       # reading them, and the agenda built out of what came back. Catches the class of
