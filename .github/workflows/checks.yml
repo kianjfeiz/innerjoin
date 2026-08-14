@@ -1,0 +1,54 @@
+# The preprocessor is verifiable with Command Line Tools alone — the check harness is
+# an ordinary executable rather than a test target, precisely so this can run without a
+# full Xcode install. The app is not built here: Liquid Glass needs a macOS the hosted
+# runners don't have yet, so the engine is what CI can honestly speak for.
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache build
+        uses: actions/cache@v4
+        with:
+          path: core/.build
+          key: ${{ runner.os }}-spm-${{ hashFiles('core/Package.resolved') }}
+          restore-keys: ${{ runner.os }}-spm-
+
+      - name: Build
+        working-directory: core
+        run: swift build --product dunescheck
+
+      # The harness exits non-zero when anything fails, and prints the failures, so
+      # this is the whole gate.
+      - name: Checks
+        working-directory: core
+        run: swift run dunescheck
+
+      # A library the CLI can drive end to end, with no model involved: adding files,
+      # reading them, and the agenda built out of what came back. Catches the class of
+      # break that only shows up once the pieces are wired together.
+      - name: Smoke — add, list, agenda
+        working-directory: core
+        run: |
+          set -euo pipefail
+          workspace="$(mktemp -d)/library"
+          docs="$(mktemp -d)"
+          printf '# Lease\nThe term ends on 2027-09-30.\n' > "$docs/lease.md"
+          printf '# Invoice\nPayment due 2027-08-11. Amount: $4,180.00.\n' > "$docs/invoice.md"
+          swift run dunes add "$docs" -w "$workspace"
+          swift run dunes list -w "$workspace"
+          swift run dunes tasks -w "$workspace"
