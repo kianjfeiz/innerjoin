@@ -344,19 +344,30 @@ struct Tasks: AsyncParsableCommand {
     @Flag(help: "Include what you've already finished.") var all = false
     @Option(help: "Finish the task at this number, as listed.") var done: Int?
     @Option(help: "Put a finished task back, by number. Use with --all.") var undo: Int?
+    @Option(help: "Set a task aside, by number. It returns on its own.") var later: Int?
+    @Option(help: "How long --later sets it aside for.") var forDays: Int = 7
 
     mutating func run() async throws {
         let store = try workspace.open()
         let agenda = Agenda(lookBackDays: back, lookAheadDays: days, includeSettled: all)
         var items = try agenda.items(store: store)
 
-        if let index = done ?? undo {
+        if let index = done ?? undo ?? later {
             guard items.indices.contains(index - 1) else {
                 throw ValidationError("No task \(index). There are \(items.count).")
             }
             let item = items[index - 1]
-            try store.setTaskDone(key: item.id, done: done != nil)
-            print("\(done != nil ? "Done" : "Back") · \(item.title)")
+            if let later, index == later {
+                // Start of day, so a week from Tuesday evening is Tuesday morning and
+                // not an hour a person would never have chosen.
+                let when = Calendar.current.startOfDay(
+                    for: Calendar.current.date(byAdding: .day, value: forDays, to: Date()) ?? Date())
+                try store.setTaskSnoozed(key: item.id, until: when)
+                print("Later · \(item.title) · back on \(Record.day(when))")
+            } else {
+                try store.setTaskDone(key: item.id, done: done != nil)
+                print("\(done != nil ? "Done" : "Back") · \(item.title)")
+            }
             items = try agenda.items(store: store)
         }
 
