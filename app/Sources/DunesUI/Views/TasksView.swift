@@ -56,6 +56,10 @@ struct TasksView: View {
                         }
                     }
                     .padding(.top, Glass.Space.tight)
+                    // Room to scroll clear of the disclosure underneath. Without it the
+                    // last row ends flush against the footer, and a row cut off hard
+                    // against a line of text reads as broken rather than as scrollable.
+                    .padding(.bottom, Glass.Space.snug)
                 }
             }
         }
