@@ -23,6 +23,7 @@ func agendaChecks() async {
     await check("what costs most to miss leads its day", kindOrderWithinADay)
     await check("finishing something clears its snooze", finishingClearsSnooze)
     await check("the window has two ends", theWindowHasTwoEnds)
+    await check("the extractor is asked for the dates that ask something", extractionAsksForAsks)
 }
 
 // MARK: - Seeding
@@ -251,6 +252,21 @@ private func theWindowHasTwoEnds() async throws {
         // A list that never forgets is a list nobody opens twice; one that only looks
         // forward loses the thing you missed. Both ends are deliberate.
         await expectEqual(items.map(\.title), ["Near"], "only what's in the window")
+    }
+}
+
+private func extractionAsksForAsks() async throws {
+    // Everything on the task list is downstream of this paragraph. If it stops asking
+    // for the call a mail proposes or the answer needed by Friday, the list narrows to
+    // contract dates without anything failing — the worst kind of regression, because
+    // the product just gets quietly less useful.
+    let instructions = Agenda.extractionInstructions.lowercased()
+    for word in ["meeting", "call", "reply_by", "follow_up", "payment_due", "delivery"] {
+        await expect(instructions.contains(word), "the extractor is asked for \(word) dates")
+    }
+    // And told to name the past as the past, which is what keeps it off the list.
+    for word in ["signed", "issued", "sent", "paid"] {
+        await expect(instructions.contains(word), "\(word) is named as already done")
     }
 }
 

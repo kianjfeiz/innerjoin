@@ -153,6 +153,17 @@ public struct Agenda: Sendable {
             .filter { $0.isLetter || $0.isNumber || $0 == "_" }
     }
 
+    // MARK: - What the extractor is asked for
+
+    /// The instructions that decide whether this list has anything in it.
+    ///
+    /// Exposed only so a check can hold the contract down. A task list built out of
+    /// documents is downstream of one paragraph in a prompt: if the extractor stops
+    /// being asked for the call a mail proposes or the answer somebody needs by
+    /// Friday, the list quietly narrows to contract dates and nobody finds out from a
+    /// crash — it just becomes less useful, which is much harder to notice.
+    public static var extractionInstructions: String { Prompt.system(.none) }
+
     /// FNV-1a, written out rather than reached for.
     ///
     /// Swift seeds `Hasher` per process, so `hashValue` gives a different answer every
