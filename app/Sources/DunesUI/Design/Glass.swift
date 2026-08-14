@@ -156,6 +156,43 @@ enum Glass {
     }
 }
 
+// MARK: - Drawing without a screen
+
+/// True while the panel is being rasterised by `ImageRenderer` rather than shown.
+private struct OffscreenRenderKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var offscreenRender: Bool {
+        get { self[OffscreenRenderKey.self] }
+        set { self[OffscreenRenderKey.self] = newValue }
+    }
+}
+
+/// A scroll view — except when the panel is being drawn offscreen.
+///
+/// `ImageRenderer` rasterises SwiftUI's own layers, and a `ScrollView` is backed by
+/// AppKit, so it comes out empty: every offscreen render of a list is a picture of
+/// nothing, which is a very convincing way to be told a list is fine when it is not.
+/// Swapping it for a stack while rendering is what keeps the harness able to see rows.
+struct ScrollOrStack<Content: View>: View {
+    @Environment(\.offscreenRender) private var offscreen
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        if offscreen {
+            VStack(spacing: 0) {
+                content
+                Spacer(minLength: 0)
+            }
+        } else {
+            ScrollView(.vertical) { content }
+                .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+}
+
 // MARK: - The frame
 
 /// The band of glass the panel sits in — the app's outer edge.
@@ -264,6 +301,8 @@ struct GlassControl: ViewModifier {
 struct PanelButton: View {
     let title: String
     var icon: String?
+    /// A number worth interrupting for. Nil means the button has nothing to say.
+    var badge: String?
     var wide = false
     var action: () -> Void
 
@@ -277,7 +316,18 @@ struct PanelButton: View {
                     Image(systemName: icon).font(.system(size: 10.5, weight: .semibold))
                 }
                 Text(title).font(Glass.Font.control)
+                if let badge {
+                    Text(badge)
+                        .font(.system(size: 10, weight: .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(Glass.Ink.primary)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(Capsule().fill(Glass.Ink.primary.opacity(0.16)))
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
+            .animation(Glass.Motion.arrive, value: badge)
             .foregroundStyle(hovering ? Glass.Ink.primary : Glass.Ink.secondary)
             .padding(.horizontal, wide ? 0 : 12)
             .frame(maxWidth: wide ? .infinity : nil)
@@ -316,11 +366,17 @@ struct Arrive: ViewModifier {
     var animation: Animation = Glass.Motion.arrive
     @State private var shown = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// `ImageRenderer` never runs `onAppear`, so everything that arrives would sit at
+    /// zero opacity and the render would be a picture of a panel with its content
+    /// missing — which is worse than no picture, because it looks like an answer.
+    @Environment(\.offscreenRender) private var offscreen
+
+    private var visible: Bool { shown || offscreen }
 
     func body(content: Content) -> some View {
         content
-            .opacity(shown ? 1 : 0)
-            .offset(y: shown || reduceMotion ? 0 : distance)
+            .opacity(visible ? 1 : 0)
+            .offset(y: visible || reduceMotion ? 0 : distance)
             .onAppear {
                 guard !shown else { return }
                 // Reduced motion means no travel, not no grace: the offset is already

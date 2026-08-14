@@ -60,6 +60,11 @@ final class Library: @unchecked Sendable {
         /// Things the library noticed that have a date or a contradiction attached —
         /// used for the prompts under the field, so they're real rather than canned.
         var prompts: [String] = []
+        /// How much is waiting, and how much of it has already slipped. Shown on the
+        /// way in: the point of noticing a deadline is telling someone before it
+        /// passes, and a list nobody opens has not done that.
+        var waiting = 0
+        var overdue = 0
         var isEmpty: Bool { documents == 0 }
     }
 
@@ -83,6 +88,11 @@ final class Library: @unchecked Sendable {
             prompts.append("What do I have about \(hub.name)?")
         }
         snapshot.prompts = Array(prompts.prefix(3))
+
+        if let items = try? Agenda().items(store: store) {
+            snapshot.waiting = items.count
+            snapshot.overdue = items.filter { $0.horizon() == .overdue }.count
+        }
         return snapshot
     }
 
@@ -126,7 +136,7 @@ final class Library: @unchecked Sendable {
         // Decisions about commitments no document produces any more would otherwise
         // pile up forever. Cheap, and only ever drops keys nothing can resurrect.
         if let live = try? agenda.liveKeys(store: store) {
-            try? store.forgetTaskStates(keeping: live)
+            _ = try? store.forgetTaskStates(keeping: live)
         }
         return items
     }

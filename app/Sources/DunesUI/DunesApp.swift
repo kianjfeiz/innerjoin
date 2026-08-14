@@ -11,6 +11,7 @@ struct DunesApp: App {
                 .task {
                     await model.load()
                     await Harness.applyLaunchState(to: model)
+                    await Harness.renderIfAsked(model)
                 }
                 .onAppear(perform: Harness.configureWindow)
                 // The window is a hole in the screen that the glass panel floats in.
@@ -73,7 +74,51 @@ struct DunesApp: App {
 ///     DUNES_AFTER=5 ./run.sh               hold the launch state back, so a camera
 ///                                          outside the process can catch the morph
 ///     DUNES_SHOT=/path.png ./shot.sh       render, photograph itself, exit
+///     DUNES_RENDER=/path.png ./run.sh      draw straight to a file and quit, with no
+///                                          window — works on a locked Mac and over
+///                                          ssh, at the cost of flat glass
 enum Harness {
+    /// Draw the panel straight to a file and quit, with no window involved.
+    ///
+    /// `DUNES_SHOT` photographs the real window, which is the truthful picture and the
+    /// one that needs a screen: Liquid Glass is composited by the window server, so it
+    /// simply isn't there in an offscreen pass. This is the other half — `ImageRenderer`
+    /// rasterises the view tree itself, so it works over ssh, on a locked Mac, and in
+    /// CI. The glass comes out flat, and everything the glass is *holding* — rows,
+    /// spacing, type, state — comes out exactly as laid out, which is most of what
+    /// there is to get wrong.
+    @MainActor
+    static func renderIfAsked(_ model: AppModel) async {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["DUNES_RENDER"] else { return }
+        // Long enough for the library read the launch state kicked off to land.
+        try? await Task.sleep(for: .milliseconds(900))
+
+        FileHandle.standardError.write(Data(
+            "render: mode=\(model.mode) tasks=\(model.tasks.count) loading=\(model.loadingRows)\n".utf8))
+        let height = model.mode == .ask ? Glass.restSize.height : Glass.openSize.height
+        let renderer = ImageRenderer(content:
+            Panel(model: model)
+                .frame(width: Glass.restSize.width, height: height)
+                .background(Color(nsColor: .windowBackgroundColor))
+                .environment(\.colorScheme,
+                             environment["DUNES_APPEARANCE"] == "light" ? .light : .dark)
+                .environment(\.offscreenRender, true)
+        )
+        renderer.scale = 2
+        defer { NSApplication.shared.terminate(nil) }
+
+        guard let image = renderer.nsImage,
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:])
+        else {
+            FileHandle.standardError.write(Data("render produced nothing\n".utf8))
+            return
+        }
+        try? png.write(to: URL(fileURLWithPath: path))
+    }
+
     /// The launch states the header comment promises. Run after `load()`, so a
     /// harness-driven question or list starts from the same loaded library a person's
     /// would. `DUNES_AFTER` holds the state back by that many seconds — the pause is

@@ -29,7 +29,7 @@ struct TasksView: View {
                 Settled()
                     .transition(Glass.Motion.settle(after: 0.05, from: 4))
             } else {
-                ScrollView(.vertical) {
+                ScrollOrStack {
                     VStack(alignment: .leading, spacing: Glass.Space.tight) {
                         ForEach(Array(groups.enumerated()), id: \.element.horizon) { index, group in
                             Section {
@@ -39,7 +39,8 @@ struct TasksView: View {
                                         now: now,
                                         settling: model.settling.contains(item.id),
                                         finish: { model.finish(item) },
-                                        ask: { model.ask(question(for: item)) }
+                                        ask: { model.ask(question(for: item)) },
+                                        snooze: { model.snooze(item, until: $0) }
                                     )
                                     // Collapsing upward as it leaves is what makes the
                                     // rows below close the gap rather than jump into it.
@@ -56,7 +57,6 @@ struct TasksView: View {
                     }
                     .padding(.top, Glass.Space.tight)
                 }
-                .scrollBounceBehavior(.basedOnSize)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -69,6 +69,16 @@ struct TasksView: View {
             }
         }
         .animation(Glass.Motion.arrive, value: model.undoable?.id)
+        // ⌘Z, because finishing something is an edit and this is the one place the app
+        // makes one. Bound here rather than globally so it can't fire from the ask
+        // field, where it belongs to the text.
+        .background {
+            Button("") { model.undoFinish() }
+                .keyboardShortcut("z", modifiers: .command)
+                .opacity(0)
+                .disabled(model.undoable == nil)
+                .accessibilityHidden(true)
+        }
     }
 
     /// Tapping a row asks about it — the app's one mechanism, kept. The question is
@@ -91,6 +101,7 @@ private struct TaskRow: View {
     let settling: Bool
     let finish: () -> Void
     let ask: () -> Void
+    let snooze: (Date) -> Void
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -110,6 +121,10 @@ private struct TaskRow: View {
                         .foregroundStyle(Glass.Ink.primary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
+                        // A contradiction is a whole sentence; without this it is
+                        // measured at its ideal width, stays on one line, and gets
+                        // cut off at the very point that says what's wrong.
+                        .fixedSize(horizontal: false, vertical: true)
                         // Struck through only while it's leaving. A permanent strike
                         // would be decoration; here it is the app agreeing with you.
                         .strikethrough(settling, color: Glass.Ink.tertiary)
@@ -129,8 +144,10 @@ private struct TaskRow: View {
                             // have to go and check.
                             Text("worked out")
                         }
-                        Dot()
-                        Text(item.documentLabel).lineLimit(1)
+                        if let source {
+                            Dot()
+                            Text(source).lineLimit(1)
+                        }
                     }
                     .font(.system(size: 10.5))
                     .foregroundStyle(overdue && !settling ? Glass.Ink.secondary : Glass.Ink.tertiary)
@@ -170,10 +187,56 @@ private struct TaskRow: View {
         .animation(Glass.Motion.touch, value: hovering)
         .animation(Glass.Motion.arrive, value: settling)
         .onHover { hovering = $0 }
+        // Not everything on the list is yours to finish — some of it is just early.
+        // Setting it aside is the honest third option next to done and ignored, and it
+        // lapses on its own, so nothing is ever silently lost.
+        .contextMenu {
+            Button("Ask about this", action: ask)
+            Divider()
+            Button("Set aside until tomorrow") { snooze(shift(days: 1)) }
+            Button("Set aside for a week") { snooze(shift(days: 7)) }
+            Button("Set aside for a month") { snooze(shift(days: 30)) }
+            Divider()
+            Button("Mark done", action: finish)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(item.kind.label): \(item.title)")
         .accessibilityHint("Ask about this")
         .accessibilityAddTraits(settling ? [.isSelected] : [])
+    }
+
+    /// Where it came from, when that adds anything.
+    ///
+    /// Filenames arrive as "2026-07-21 Meridian Analytics Q2 Usage Report.md": a date
+    /// that is already in the row, an extension nobody needs, and a name that is
+    /// usually the title again. Repeating the title in smaller grey type is the kind
+    /// of detail that makes a row look busy while telling you nothing, so this strips
+    /// the packaging and stays quiet when what's left is what you already read.
+    private var source: String? {
+        var label = item.documentLabel
+        for suffix in [".md", ".pdf", ".txt", ".docx", ".eml", ".png", ".jpg"]
+        where label.lowercased().hasSuffix(suffix) {
+            label = String(label.dropLast(suffix.count))
+        }
+        // A leading ISO date, which every row already carries in its own words.
+        if label.count > 11, label.prefix(4).allSatisfy(\.isNumber), label.dropFirst(4).hasPrefix("-") {
+            let rest = label.dropFirst(10)
+            if rest.hasPrefix(" ") { label = String(rest.dropFirst()) }
+        }
+        label = label.trimmingCharacters(in: .whitespaces)
+        guard !label.isEmpty else { return nil }
+        let title = item.title.lowercased()
+        let simplified = label.lowercased()
+        guard !title.contains(simplified), !simplified.contains(title) else { return nil }
+        return label
+    }
+
+    /// Start of the day N days out, so "tomorrow" means tomorrow morning rather than
+    /// this time tomorrow — a snooze set at 11pm should not lapse at 11pm.
+    private func shift(days: Int) -> Date {
+        let calendar = Calendar.current
+        let day = calendar.date(byAdding: .day, value: days, to: now) ?? now
+        return calendar.startOfDay(for: day)
     }
 
     /// How far off it is, in the words a person would use. "In 3 days" is read at a
@@ -271,7 +334,10 @@ private struct GroupHeader: View {
                 .foregroundStyle(Glass.Ink.faint)
             Spacer(minLength: 0)
         }
-        .foregroundStyle(horizon == .overdue ? Glass.Ink.secondary : Glass.Ink.faint)
+        // Overdue is the one heading worth reading twice, so it gets weight rather than
+        // the same grey as the rest with a different word in it.
+        .foregroundStyle(horizon == .overdue
+                         ? Glass.Ink.primary.opacity(0.75) : Glass.Ink.faint)
         .padding(.horizontal, Glass.Space.tight)
         .padding(.top, Glass.Space.tight)
         .padding(.bottom, 2)

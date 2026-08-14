@@ -193,7 +193,15 @@ struct AskView: View {
             HStack(spacing: Glass.Space.snug) {
                 ForEach(Array([Mode.Scope.people, .watching, .sources].enumerated()),
                         id: \.element) { index, scope in
-                    PanelButton(title: scope.title, wide: true) { model.browse(scope) }
+                    PanelButton(
+                        title: scope.title,
+                        // Only Tasks carries a count, and only when something has
+                        // actually slipped. A badge on every button is furniture; one
+                        // that appears when it means something is a signal.
+                        badge: scope == .watching && model.snapshot.overdue > 0
+                            ? "\(model.snapshot.overdue)" : nil,
+                        wide: true
+                    ) { model.browse(scope) }
                         .arrives(2 + index)
                 }
             }
