@@ -19,6 +19,10 @@ func agendaChecks() async {
     await check("a snooze hides until its date, then stops", snoozeExpires)
     await check("contradictions become things to check", anomaliesBecomeChecks)
     await check("pruning keeps what a person finished", pruningKeepsDone)
+    await check("horizons land on day boundaries, not 24-hour ones", horizonBoundaries)
+    await check("what costs most to miss leads its day", kindOrderWithinADay)
+    await check("finishing something clears its snooze", finishingClearsSnooze)
+    await check("the window has two ends", theWindowHasTwoEnds)
 }
 
 // MARK: - Seeding
@@ -187,6 +191,66 @@ private func anomaliesBecomeChecks() async throws {
         await expectEqual(items.last?.kind, .check, "a contradiction is something to check")
         await expectNil(items.last?.due, "and it has no date of its own")
         await expectEqual(items.last?.horizon(), .someday, "so it sits under 'No date'")
+    }
+}
+
+private func horizonBoundaries() async throws {
+    // "Tomorrow" has to mean the next calendar day, not 24 hours from now. Run this at
+    // 11pm with hour arithmetic and everything due tomorrow morning reads as today.
+    let calendar = Calendar.current
+    let lateTonight = calendar.date(bySettingHour: 23, minute: 30, second: 0, of: Date())!
+    func horizonOf(_ due: Date) -> Commitment.Horizon {
+        Commitment(id: "x", title: "t", due: due, kind: .deadline,
+                   documentID: 1, documentLabel: "d").horizon(now: lateTonight, calendar: calendar)
+    }
+    let tomorrowMorning = calendar.date(byAdding: .hour, value: 8, to: lateTonight)!
+    await expectEqual(horizonOf(tomorrowMorning), .tomorrow, "8 hours ahead can still be tomorrow")
+
+    let laterTonight = calendar.date(byAdding: .minute, value: 20, to: lateTonight)!
+    await expectEqual(horizonOf(laterTonight), .today, "and 20 minutes ahead is still today")
+
+    let weekOut = calendar.date(byAdding: .day, value: 7, to: lateTonight)!
+    await expectEqual(horizonOf(weekOut), .thisWeek, "a week out is this week")
+    let justPast = calendar.date(byAdding: .day, value: 8, to: lateTonight)!
+    await expectEqual(horizonOf(justPast), .later, "eight days out is not")
+}
+
+private func kindOrderWithinADay() async throws {
+    try await withWorkspace { store in
+        let due = day(3)
+        try seed(store, name: "a.md", title: "A meeting", dates: [("meeting", due)])
+        try seed(store, name: "b.md", title: "An invoice", dates: [("payment_due", due)])
+        try seed(store, name: "c.md", title: "A notice", dates: [("notice_deadline", due)])
+        let items = try Agenda().items(store: store)
+        await expectEqual(items.map(\.kind), [.payment, .deadline, .meeting],
+                          "money, then the deadline, then the meeting")
+    }
+}
+
+private func finishingClearsSnooze() async throws {
+    try await withWorkspace { store in
+        try seed(store, name: "a.md", title: "Thing", dates: [("due", day(5))])
+        let item = try Agenda().items(store: store)[0]
+        try store.setTaskSnoozed(key: item.id, until: day(10))
+        try store.setTaskDone(key: item.id, done: true)
+        // Finishing it removes the reason to hide it. Leaving the snooze set means
+        // putting it back later silently re-hides it, which reads as the undo failing.
+        await expectNil(try store.taskStates()[item.id]?.snoozedUntil,
+                        "the snooze goes when the thing is done")
+        try store.setTaskDone(key: item.id, done: false)
+        await expectEqual(try Agenda().items(store: store).count, 1, "so putting it back shows it")
+    }
+}
+
+private func theWindowHasTwoEnds() async throws {
+    try await withWorkspace { store in
+        try seed(store, name: "old.md", title: "Ancient", dates: [("due", day(-400))])
+        try seed(store, name: "far.md", title: "Distant", dates: [("due", day(400))])
+        try seed(store, name: "now.md", title: "Near", dates: [("due", day(-3))])
+        let items = try Agenda().items(store: store)
+        // A list that never forgets is a list nobody opens twice; one that only looks
+        // forward loses the thing you missed. Both ends are deliberate.
+        await expectEqual(items.map(\.title), ["Near"], "only what's in the window")
     }
 }
 

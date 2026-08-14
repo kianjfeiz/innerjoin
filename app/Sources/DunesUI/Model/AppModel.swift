@@ -132,7 +132,13 @@ final class AppModel {
                 let fetched = (try? await library.tasks()) ?? []
                 guard case .browsing(.watching) = mode else { return }
                 tasks = fetched
+                // Both are about a click that happened on a list that is no longer on
+                // screen. An undo bar that outlives the visit offers to reverse
+                // something the person has stopped thinking about, and points at a row
+                // this fetch has already dropped.
                 settling = []
+                undoable = nil
+                undoTimer?.cancel()
                 loadingRows = false
                 return
             }
@@ -236,6 +242,8 @@ final class AppModel {
     /// from narrating to nobody.
     func dismiss() {
         answerTask?.cancel()
+        undoTimer?.cancel()
+        undoable = nil
         mode = .ask
     }
 }
