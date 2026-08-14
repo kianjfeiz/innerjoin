@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 import DunesCore
 
 /// What the panel is doing. The whole app is this one small state machine, which is what
@@ -76,6 +77,12 @@ final class AppModel {
 
     var draft = ""
 
+    /// Who this library belongs to, or nil until somebody says. The panel shows the way
+    /// in until this is answered — the app has one job and it is personal enough to be
+    /// worth naming an owner for.
+    private(set) var account: Account?
+    private(set) var signIn: SignIn?
+
     private let library: Library
     private var answerTask: Task<Void, any Error>?
 
@@ -89,7 +96,30 @@ final class AppModel {
     }
 
     func load() async {
+        account = AccountStore.load(from: library.workspace)
+        if account == nil { beginSignIn() }
         snapshot = (try? await library.snapshot()) ?? Library.Snapshot()
+    }
+
+    var needsSignIn: Bool { account == nil }
+
+    private func beginSignIn() {
+        signIn = SignIn(workspace: library.workspace) { [weak self] account in
+            guard let self else { return }
+            withAnimation(Glass.Motion.morph) {
+                self.account = account
+                self.signIn = nil
+            }
+        }
+    }
+
+    /// Forget who's signed in. The library itself is untouched — this says nothing about
+    /// the documents, only about whose name is on them.
+    func signOut() {
+        AccountStore.clear(from: library.workspace)
+        account = nil
+        dismiss()
+        beginSignIn()
     }
 
     // MARK: - Asking

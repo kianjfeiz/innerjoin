@@ -11,12 +11,13 @@ struct Panel: View {
 
     /// How tall the glass draws — not how tall the window is, which never changes.
     private var glassHeight: CGFloat {
-        model.mode == .ask ? Glass.restSize.height : Glass.openSize.height
+        if model.needsSignIn { return Glass.welcomeSize.height }
+        return model.mode == .ask ? Glass.restSize.height : Glass.openSize.height
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            Header(model: model)
+            Header(model: model, bare: model.needsSignIn)
 
             // A ZStack, not a Group: during a handoff the leaver and the arriver are
             // both on screen for a few frames, and they must overlap in place. In a
@@ -24,6 +25,11 @@ struct Panel: View {
             // exactly the lurch this panel used to have.
             ZStack {
                 switch model.mode {
+                case _ where model.needsSignIn:
+                    if let signIn = model.signIn {
+                        WelcomeView(model: signIn)
+                            .transition(Glass.Motion.handoff)
+                    }
                 case .ask:
                     AskView(model: model, focused: $fieldFocused)
                         .transition(Glass.Motion.handoff)
@@ -40,7 +46,7 @@ struct Panel: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Footer(mode: model.mode)
+            Footer(mode: model.mode, signingIn: model.needsSignIn)
         }
         .padding(Glass.Space.edge)
         // The single Liquid Glass surface in the app.
@@ -123,6 +129,9 @@ struct Panel: View {
 /// The wordmark, and the one control that isn't a scope: Files.
 private struct Header: View {
     @Bindable var model: AppModel
+    /// Before there's an owner there is nothing to browse, so the wordmark stands alone
+    /// rather than beside a control that would go nowhere.
+    var bare = false
 
     @State private var hoveringMark = false
 
@@ -146,6 +155,7 @@ private struct Header: View {
 
             Spacer()
 
+            if bare { EmptyView() } else {
             // The one control that changes with mode, so it changes the way the panel
             // does: the old label blurs away as the new one forms — a button being
             // relabelled, not a button being replaced. Overlapped in a ZStack so the
@@ -161,6 +171,7 @@ private struct Header: View {
                     .transition(AnyTransition(.blurReplace).animation(Glass.Motion.arrive))
                 }
             }
+            }
         }
     }
 }
@@ -171,6 +182,7 @@ private struct Header: View {
 /// reading your files shouldn't be something you have to go looking for.
 private struct Footer: View {
     let mode: Mode
+    var signingIn = false
 
     var body: some View {
         Text(caption)
@@ -186,6 +198,9 @@ private struct Footer: View {
     }
 
     private var caption: String {
+        if signingIn {
+            return "dunes reads the files you give it, on this Mac. It never uploads them."
+        }
         switch mode {
         case .ask, .answering:
             return "Answers come from your own files, with sources. Double-check anything important."

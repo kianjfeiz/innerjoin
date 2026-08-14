@@ -14,6 +14,10 @@ enum Glass {
     /// browse. It grows only when it has something to show.
     static let restSize = CGSize(width: 560, height: 340)
     static let openSize = CGSize(width: 560, height: 520)
+    /// The way in. Taller than resting, because three doors and the sentence explaining
+    /// what they do is more than a question field needs — and shorter than a list,
+    /// because a sign-in that fills the screen looks like it wants more than it does.
+    static let welcomeSize = CGSize(width: 560, height: 392)
 
     /// What the window actually measures: the tallest the glass ever gets, plus the
     /// transparent room its shadow falls into. Constant, because a window that resizes

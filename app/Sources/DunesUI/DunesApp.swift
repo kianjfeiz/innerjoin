@@ -86,7 +86,8 @@ enum Harness {
         }
         FileHandle.standardError.write(Data(
             "render: mode=\(model.mode) tasks=\(model.tasks.count) loading=\(model.loadingRows)\n".utf8))
-        let height = model.mode == .ask ? Glass.restSize.height : Glass.openSize.height
+        let height = model.needsSignIn ? Glass.welcomeSize.height
+            : (model.mode == .ask ? Glass.restSize.height : Glass.openSize.height)
         let renderer = ImageRenderer(content:
             Panel(model: model)
                 .frame(width: Glass.restSize.width, height: height)
@@ -119,6 +120,9 @@ enum Harness {
         let environment = ProcessInfo.processInfo.environment
         if let delay = Double(environment["DUNES_AFTER"] ?? ""), delay > 0 {
             try? await Task.sleep(for: .seconds(delay))
+        }
+        if let step = environment["DUNES_SIGNIN"] {
+            model.signIn?.harnessJump(to: step)
         }
         if let question = environment["DUNES_ASK"], !question.isEmpty {
             model.ask(question)
