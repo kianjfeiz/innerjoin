@@ -43,6 +43,10 @@ jobs:
       # log, and readable at all without admin rights on the repository.
       - name: Checks
         working-directory: core
+        # Speech recognition needs a real user session, which a hosted runner has none
+        # of. Named rather than silently tolerated: the run prints what it skipped.
+        env:
+          DUNES_CHECKS_WITHOUT: speech
         run: |
           set -o pipefail
           swift run dunescheck 2>&1 | tee /tmp/checks.txt || status=$?

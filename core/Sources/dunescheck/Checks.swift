@@ -25,7 +25,7 @@ struct Checks {
         await check("tables in text-layer pdfs are recovered", textLayerTables)
         await check("garbled text layers are recognized as junk", garbageDetection)
 
-        await check("audio is transcribed with timestamps", audioTranscription)
+        await check("audio is transcribed with timestamps", needs: "speech", audioTranscription)
 
         await formatChecks()
 
@@ -67,8 +67,10 @@ struct Checks {
         await check("bounding boxes convert from bottom-left origin", geometryConversion)
 
         let passed = await Report.shared.passed
+        let skipped = await Report.shared.skipped
         let failures = await Report.shared.failures
-        print("\n\(passed) checks passed, \(failures.count) failed")
+        print("\n\(passed) checks passed, \(failures.count) failed"
+            + (skipped > 0 ? ", \(skipped) skipped for want of a capability" : ""))
         for failure in failures { print("  ✗ \(failure)") }
         if !failures.isEmpty { exit(1) }
     }
