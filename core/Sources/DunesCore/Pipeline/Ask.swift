@@ -59,11 +59,45 @@ public struct Ask: Sendable {
         public let consulted: [(id: Int64, label: String, matchedRecord: Bool)]
     }
 
+    /// What to say when the library holds nothing on the subject.
+    ///
+    /// "Nothing in the library mentions that" is true and nearly useless: it leaves a
+    /// person guessing whether they asked badly, whether the file they meant was ever
+    /// added, or whether the thing is broken. Since the answer to all three is sitting
+    /// right there in the library, it says what it *does* hold instead, and the person
+    /// can aim the next question rather than guess at it.
+    ///
+    /// Still a refusal — `answered` stays false and nothing is cited, because inventing
+    /// an answer is the one thing this must never do.
+    private func nothingMatched() -> String {
+        let documents = (try? store.counts().documents) ?? 0
+        guard documents > 0 else {
+            return "There's nothing in your library yet. "
+                + "Add some files with `dunes add ~/Documents` and ask me again."
+        }
+        let subjects = ((try? store.graphHealth().hubs) ?? [])
+            .prefix(3).map(\.name)
+        let scale = "\(documents) file\(documents == 1 ? "" : "s")"
+        guard !subjects.isEmpty else {
+            return "Nothing in your \(scale) mentions that. "
+                + "They haven't been understood yet, so I can only match words that "
+                + "appear in them — `dunes understand` reads them properly."
+        }
+        return "Nothing in your \(scale) mentions that. "
+            + "They're mostly about \(list(subjects)) — ask me about any of those."
+    }
+
+    /// "a, b and c", so a sentence reads as a sentence.
+    private func list(_ items: some Collection<String>) -> String {
+        let items = Array(items)
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
+    }
+
     public func answer(_ question: String) async throws -> Answer {
         let hits = try store.retrieve(question, limit: breadth)
         guard !hits.isEmpty else {
-            return Answer(question: question,
-                          text: "Nothing in the library mentions that.",
+            return Answer(question: question, text: nothingMatched(),
                           answered: false, citations: [], invented: 0, consulted: [])
         }
 

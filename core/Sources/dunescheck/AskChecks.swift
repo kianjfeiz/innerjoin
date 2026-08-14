@@ -9,6 +9,7 @@ func askChecks() async {
     await check("an invented citation is dropped, not shown", inventedCitationDropped)
     await check("a citation to a document not consulted is refused", crossDocumentCitation)
     await check("nothing matching means no model call and an honest answer", nothingMatches)
+    await check("an empty library says how to fill it", nothingToSearch)
     await check("a confident answer with no words is not passed off as one", emptyAnswer)
     await check("the same citation twice is shown once", duplicateCitations)
 }
@@ -130,6 +131,28 @@ private func nothingMatches() async throws {
         await expectEqual(provider.calls, 0,
                           "and the model is never called, so a miss is free")
         await expect(answer.citations.isEmpty, "with nothing cited")
+
+        // "Nothing mentions that" is true and nearly useless: it leaves a person
+        // guessing whether they asked badly, whether the file they meant was ever
+        // added, or whether the thing is broken. The library can answer all three, so
+        // the refusal says what it does hold and the next question can be aimed.
+        await expect(answer.text.contains("file"),
+                     "the refusal says how much it looked through")
+        await expect(!answer.text.hasSuffix("mentions that."),
+                     "and doesn't stop at the dead end")
+    }
+}
+
+/// The same refusal, with nothing in the library at all — where the useful thing to
+/// say is not "no match" but how to put something in it.
+private func nothingToSearch() async throws {
+    try await withWorkspace { store in
+        let provider = CountingProvider(json: #"{"answered":true,"answer":"x","citations":[]}"#)
+        let answer = try await Ask(store: store, provider: provider).answer("anything at all")
+        await expect(!answer.answered, "an empty library answers nothing")
+        await expectEqual(provider.calls, 0, "without calling a model")
+        await expect(answer.text.contains("dunes add"),
+                     "and says how to put something in it")
     }
 }
 

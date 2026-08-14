@@ -30,6 +30,8 @@ final class Library: @unchecked Sendable {
     /// concurrent *opening* that has to happen exactly once.
     private let lock = NSLock()
     private var cached: Store?
+    private let settingsLock = NSLock()
+    private var cachedSettings: ProviderSettings?
 
     private func open() throws -> Store {
         lock.lock()
@@ -163,7 +165,7 @@ final class Library: @unchecked Sendable {
                     let count = try store.counts().documents
                     continuation.yield(.working("Searching \(count) file\(count == 1 ? "" : "s")"))
 
-                    let settings = Self.providerSettings()
+                    let settings = providerSettings()
                     guard settings.apiKey?.isEmpty == false else {
                         continuation.yield(.text(
                             "No model is connected, so I can search but not answer.\n\n"
@@ -214,13 +216,28 @@ final class Library: @unchecked Sendable {
 
     /// The environment wins, so the harness can point at any model; otherwise the one the
     /// engine is currently tuned against. A Settings surface replaces this default later.
-    private static func providerSettings() -> ProviderSettings {
+    ///
+    /// Read once per launch and kept.
+    ///
+    /// Resolving these reaches into the keychain for the API key, and the keychain asks
+    /// the user for permission per *reading process*, not per read — so doing it inside
+    /// `answer` put a password dialog in front of somebody every single time they asked
+    /// a question. The answer to a question they had already granted.
+    ///
+    /// The failed case is cached too. A denied read that retries is a dialog that comes
+    /// back, which is worse than the first one.
+    private func providerSettings() -> ProviderSettings {
+        settingsLock.lock()
+        defer { settingsLock.unlock() }
+        if let cachedSettings { return cachedSettings }
         var environment = ProcessInfo.processInfo.environment
         if environment["DUNES_PROVIDER"] == nil {
             environment["DUNES_PROVIDER"] = "openrouter"
             environment["DUNES_MODEL"] = environment["DUNES_MODEL"] ?? "openai/gpt-5.6-luna"
         }
-        return ProviderSettings.fromEnvironment(environment)
+        let settings = ProviderSettings.fromEnvironment(environment)
+        cachedSettings = settings
+        return settings
     }
 
     private func readable(_ kind: String) -> String {
