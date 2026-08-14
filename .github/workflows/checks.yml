@@ -16,10 +16,15 @@ concurrency:
 
 jobs:
   engine:
-    runs-on: macos-15
+    # The package floor is macOS 26, so an older image can't build it at all — the
+    # first run of this workflow failed on exactly that.
+    runs-on: macos-26
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: swift --version && sw_vers
 
       - name: Cache build
         uses: actions/cache@v4
