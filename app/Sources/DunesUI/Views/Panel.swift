@@ -9,6 +9,11 @@ struct Panel: View {
     @Environment(\.colorScheme) private var scheme
     @FocusState private var fieldFocused: Bool
 
+    /// How tall the glass draws — not how tall the window is, which never changes.
+    private var glassHeight: CGFloat {
+        model.mode == .ask ? Glass.restSize.height : Glass.openSize.height
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Header(model: model)
@@ -66,16 +71,39 @@ struct Panel: View {
         // is most of what reads as depth.
         .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.18), radius: 12, y: 4)
         .padding(Glass.Space.band)
-        .frame(
-            width: Glass.restSize.width,
-            height: model.mode == .ask ? Glass.restSize.height : Glass.openSize.height
-        )
+        // The glass's own height. This is the only thing the morph moves.
+        .frame(width: Glass.restSize.width, height: glassHeight)
+        // The frame belongs to the panel, not to the window. Hung on the window it
+        // stayed the window's full height while the panel shrank away from it, leaving
+        // a slab of glass below the app with nothing in it.
+        .background(WindowGlass())
+        // The app's shadow, drawn here rather than by the window.
+        //
+        // AppKit derives a window shadow from the alpha of its backing store and then
+        // caches it. The window no longer changes size, but the glass inside it does —
+        // so after the panel shrank back from a list, the old taller shadow stayed
+        // behind it as a visible rectangle of nothing. Drawn in SwiftUI it is part of
+        // the same layer animation as the glass and cannot fall out of step with it.
+        .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.22), radius: 22, y: 8)
+        .padding(Glass.Space.shadowRoom)
+        // …inside a window that never changes size.
+        //
+        // This is the whole reason the morph used to judder. `.contentSize` sizes the
+        // window to the content's *final* height, and AppKit resizes a window in one
+        // step — measured going 340 to 520 with nothing in between, while the glass
+        // inside took 0.42s to catch up. So the window popped, then the glass grew
+        // into it, then the rows landed: three events where there should be one
+        // movement. Reserving the tall size once and animating only within it makes
+        // the morph a pure layer animation, which is the kind macOS interpolates.
+        //
+        // The reserved strip is transparent and sits below the panel, so nothing shows
+        // and clicks in it pass through to whatever is behind.
+        .frame(width: Glass.windowSize.width, height: Glass.windowSize.height, alignment: .top)
         // Declared shorter than it draws, and pinned to the bottom, so the overflow
-        // rises into the title-bar strip. The window then measures exactly the glass.
+        // rises into the title-bar strip rather than hanging off the end.
         .frame(
-            width: Glass.restSize.width,
-            height: (model.mode == .ask ? Glass.restSize.height : Glass.openSize.height)
-                - Glass.titlebarStrip,
+            width: Glass.windowSize.width,
+            height: Glass.windowSize.height - Glass.titlebarStrip,
             alignment: .bottom
         )
         .animation(Glass.Motion.morph, value: model.mode)

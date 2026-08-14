@@ -22,26 +22,8 @@ struct DunesApp: App {
                 // It goes on the *view*, not the scene — `containerBackground(_:for:)` is
                 // a View modifier despite reading like window configuration.
                 .containerBackground(.clear, for: .window)
-                // The margin around the panel — the room the shadow falls into, plus the
-                // strip the hidden title bar reserves — is part of the app, not a hole
-                // through to the desktop.
-                //
-                // Two separate things decide that, and only one of them was ever the
-                // problem. The window server routes a click by the alpha under the
-                // pointer, and the shadow already lends that whole margin alpha (5–87,
-                // measured) — so the clicks were arriving. What was missing is a view to
-                // arrive *at*: `padding` leaves empty space, and empty space is not
-                // hit-tested, so the event reached the window and died there.
-                //
-                // `Color.clear` was not enough: it hit-tests inside SwiftUI but leaves
-                // the backing store empty, and the window server routes a click by the
-                // pixels under the pointer, not by the view tree. The frame needs to be
-                // *something*. Being glass, it now is.
-                //
-                // No gesture is attached on purpose: the scene's
-                // `windowBackgroundDragBehavior(.enabled)` treats this as the window's
-                // background, so dragging the frame still moves the window.
-                .background(WindowGlass().ignoresSafeArea())
+                // The frame the panel sits in is drawn by Panel itself, so that it is
+                // sized by the glass rather than by the window — see WindowGlass.
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -143,6 +125,14 @@ enum Harness {
         } else if let raw = environment["DUNES_BROWSE"], let scope = Mode.Scope(rawValue: raw) {
             model.browse(scope)
         }
+        // DUNES_RETURN comes back to the resting panel that many seconds later. The
+        // shape a panel is left in *after* a morph is a different thing from the shape
+        // it launches in, and the bugs that live there — a stale shadow, a frame that
+        // didn't shrink with it — are invisible to a camera pointed at a fresh launch.
+        if let back = Double(environment["DUNES_RETURN"] ?? ""), back > 0 {
+            try? await Task.sleep(for: .seconds(back))
+            model.dismiss()
+        }
     }
 
     static func configureWindow() {
@@ -168,10 +158,12 @@ enum Harness {
             // background — otherwise a grey rectangle shows through behind the radius.
             window.isOpaque = false
             window.backgroundColor = .clear
-            // The shadow, though, is the system's again: the glass frame is now the
-            // app's outermost shape, and AppKit shadows that shape exactly, with no
-            // transparent margin needed to catch it.
-            window.hasShadow = true
+            // The panel draws its own shadow. AppKit's is derived from the window's
+            // alpha and then cached, and the window no longer changes size while the
+            // glass inside it does — so the system shadow would keep the shape of
+            // whichever mode was tallest and hang below the panel as a rectangle of
+            // nothing.
+            window.hasShadow = false
             window.isMovableByWindowBackground = true
             window.titlebarAppearsTransparent = true
             for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {

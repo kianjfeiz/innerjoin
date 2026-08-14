@@ -56,11 +56,13 @@ struct TasksView: View {
 
     var body: some View {
         ZStack {
-            if model.loadingRows {
-                Color.clear
-            } else if model.tasks.isEmpty {
-                Settled()
-                    .transition(Glass.Motion.settle(after: 0.05, from: 4))
+            // No placeholder branch. A local read lands in about twenty milliseconds,
+            // and a view inserted and removed inside one is a flicker, not feedback.
+            if model.tasks.isEmpty {
+                if !model.loadingRows {
+                    Settled()
+                        .transition(Glass.Motion.settle(after: 0.05, from: 4))
+                }
             } else {
                 ScrollOrStack {
                     VStack(alignment: .leading, spacing: Glass.Space.tight) {

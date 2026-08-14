@@ -15,6 +15,15 @@ enum Glass {
     static let restSize = CGSize(width: 560, height: 340)
     static let openSize = CGSize(width: 560, height: 520)
 
+    /// What the window actually measures: the tallest the glass ever gets, plus the
+    /// transparent room its shadow falls into. Constant, because a window that resizes
+    /// resizes in one step while the glass inside it animates — which is what made the
+    /// morph judder.
+    static var windowSize: CGSize {
+        CGSize(width: openSize.width + Space.shadowRoom * 2,
+               height: openSize.height + Space.shadowRoom * 2)
+    }
+
     /// What the hidden title bar reserves. SwiftUI adds it to whatever height the
     /// content declares, so the panel declares itself this much shorter and overflows
     /// back up into the strip — leaving the window exactly as tall as the glass, with
@@ -43,6 +52,10 @@ enum Glass {
         /// a body of glass with a near and a far surface — thinner and it flattens
         /// into a stroke, which is the difference between a lens and a border.
         static let band: CGFloat = 15
+        /// Transparent room kept around the glass for its own shadow to fall into.
+        /// The window is this much bigger than the app on every side, and none of it
+        /// is ever drawn.
+        static let shadowRoom: CGFloat = 14
     }
 
     // MARK: - Type
@@ -196,6 +209,10 @@ struct ScrollOrStack<Content: View>: View {
         } else {
             ScrollView(.vertical) { content }
                 .scrollBounceBehavior(.basedOnSize)
+                // macOS flashes scroll indicators when a scroll view appears. On a
+                // panel that morphs into one, that flash arrives in the middle of the
+                // morph and reads as a piece of chrome popping in.
+                .scrollIndicators(.never)
         }
     }
 }
