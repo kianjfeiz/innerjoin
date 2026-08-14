@@ -124,6 +124,14 @@ enum Glass {
         /// Content leaving. A plain ease-out: an exit should be over before anyone
         /// studies it.
         static let depart = Animation.easeOut(duration: 0.14)
+        /// A checkbox closing. Slower than a hover and springier than anything else in
+        /// the app, because this is the one gesture that changes the library and it
+        /// should be possible to watch it happen.
+        static let tick = Animation.smooth(duration: 0.28, extraBounce: 0.28)
+        /// A finished row leaving, and the ones below it closing the gap. Slightly
+        /// longer than `arrive`: things that vanish need more time to be believed than
+        /// things that appear.
+        static let settleRow = Animation.smooth(duration: 0.36)
         static let stagger: Double = 0.045
 
         /// One branch of the panel handing off to another. The leaver fades in place

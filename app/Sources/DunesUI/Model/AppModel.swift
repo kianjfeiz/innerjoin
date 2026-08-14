@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import DunesCore
 
 /// What the panel is doing. The whole app is this one small state machine, which is what
 /// lets a single window morph between asking, answering and browsing without ever opening
@@ -62,6 +63,17 @@ final class AppModel {
     private(set) var rows: [Library.Row] = []
     private(set) var loadingRows = false
 
+    /// The agenda, and the two pieces of state that make finishing something feel like
+    /// an act rather than a repaint.
+    private(set) var tasks: [Commitment] = []
+    /// Ticked, still on screen, on its way out. The row draws itself finished while
+    /// this holds it, which is what gives the animation something to animate.
+    private(set) var settling: Set<String> = []
+    /// The last thing finished, and how to put it back.
+    private(set) var undoable: Commitment?
+
+    private var undoTimer: Task<Void, Never>?
+
     var draft = ""
 
     private let library: Library
@@ -116,16 +128,89 @@ final class AppModel {
         loadingRows = true
 
         Task { [library] in
+            if scope == .watching {
+                let fetched = (try? await library.tasks()) ?? []
+                guard case .browsing(.watching) = mode else { return }
+                tasks = fetched
+                settling = []
+                loadingRows = false
+                return
+            }
             let fetched: [Library.Row]
             switch scope {
             case .people:   fetched = (try? await library.people()) ?? []
-            case .watching: fetched = (try? await library.watching()) ?? []
             case .files:    fetched = (try? await library.files()) ?? []
             case .sources:  fetched = Self.sourceRows(for: library)
+            case .watching: fetched = []
             }
             guard case .browsing(scope) = mode else { return }
             rows = fetched
             loadingRows = false
+        }
+    }
+
+    // MARK: - Finishing things
+
+    /// Tick something off.
+    ///
+    /// Two stages on purpose. The row is marked settling immediately, so it can draw
+    /// itself finished and be *seen* to be finished; only then does it leave. Removing
+    /// it on the click would be faster and would feel like the app had swallowed it —
+    /// the pause is the acknowledgement.
+    ///
+    /// The write happens straight away regardless, so a quit mid-animation still keeps
+    /// the decision.
+    func finish(_ item: Commitment) {
+        guard !settling.contains(item.id) else { return }
+        settling.insert(item.id)
+        undoTimer?.cancel()
+        undoable = item
+
+        Task { [library] in
+            try? await library.setTaskDone(item.id, done: true)
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(420))
+            guard settling.contains(item.id) else { return }   // undone in the meantime
+            tasks.removeAll { $0.id == item.id }
+            settling.remove(item.id)
+        }
+        undoTimer = Task {
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            undoable = nil
+        }
+    }
+
+    /// Put the last finished thing back, wherever it belongs in the order.
+    func undoFinish() {
+        guard let item = undoable else { return }
+        undoable = nil
+        undoTimer?.cancel()
+        settling.remove(item.id)
+
+        Task { [library] in
+            try? await library.setTaskDone(item.id, done: false)
+            guard case .browsing(.watching) = mode else { return }
+            // Re-read rather than re-insert: the agenda decides the order, and putting
+            // it back by hand would be a second, quietly diverging implementation.
+            tasks = (try? await library.tasks()) ?? tasks
+        }
+    }
+
+    /// Set something aside. It comes back on its own once the date passes.
+    func snooze(_ item: Commitment, until: Date) {
+        settling.insert(item.id)
+        undoTimer?.cancel()
+        undoable = nil
+
+        Task { [library] in
+            try? await library.snoozeTask(item.id, until: until)
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(320))
+            tasks.removeAll { $0.id == item.id }
+            settling.remove(item.id)
         }
     }
 

@@ -118,34 +118,27 @@ final class Library: @unchecked Sendable {
             }
     }
 
-    /// What the library is watching: dated things and contradictions. This is the closest
-    /// thing to the old briefing, kept because it's the most valuable thing the engine
-    /// produces on its own.
-    func watching() async throws -> [Row] {
+    /// What the library is waiting on you for, in the order it wants attention.
+    func tasks() async throws -> [Commitment] {
         let store = try open()
-        var rows: [Row] = []
+        let agenda = Agenda()
+        let items = try agenda.items(store: store)
+        // Decisions about commitments no document produces any more would otherwise
+        // pile up forever. Cheap, and only ever drops keys nothing can resurrect.
+        if let live = try? agenda.liveKeys(store: store) {
+            try? store.forgetTaskStates(keeping: live)
+        }
+        return items
+    }
 
-        for hit in try store.upcoming(withinDays: 120).prefix(6) {
-            rows.append(Row(
-                id: "u\(hit.date.id ?? 0)",
-                title: hit.record.title,
-                detail: "\(readable(hit.date.kind)) · \(Self.shortDate(hit.date.date))"
-                    + (hit.date.derived ? " · worked out" : ""),
-                symbol: "calendar",
-                question: "What happens with \(hit.record.title), and when?"
-            ))
-        }
-        for entry in try store.flagged(limit: 6) {
-            guard let anomaly = entry.anomalies.first else { continue }
-            rows.append(Row(
-                id: "a\(anomaly.id ?? 0)",
-                title: anomaly.detail,
-                detail: entry.document.label,
-                symbol: "exclamationmark.triangle",
-                question: "What doesn't add up in \(entry.document.label)?"
-            ))
-        }
-        return rows
+    /// Finish one, or put it back.
+    func setTaskDone(_ key: String, done: Bool) async throws {
+        try open().setTaskDone(key: key, done: done)
+    }
+
+    /// Set one aside. It returns on its own when the date passes.
+    func snoozeTask(_ key: String, until: Date?) async throws {
+        try open().setTaskSnoozed(key: key, until: until)
     }
 
     // MARK: - Answering

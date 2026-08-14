@@ -25,6 +25,9 @@ struct Panel: View {
                 case .answering:
                     AnswerView(model: model)
                         .transition(Glass.Motion.handoff)
+                case .browsing(.watching):
+                    TasksView(model: model)
+                        .transition(Glass.Motion.handoff)
                 case .browsing(let scope):
                     BrowseView(model: model, scope: scope)
                         .transition(Glass.Motion.handoff)
