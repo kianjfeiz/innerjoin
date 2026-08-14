@@ -253,8 +253,24 @@ private struct TaskRow: View {
         case -1:           return "yesterday"
         case 2...6:        return "in \(days) days"
         case -6 ... -2:    return "\(-days) days ago"
+        // How late a thing is *is* the point of an overdue row, and a bare date makes
+        // you work that out against today before you can feel it. Weeks and months
+        // carry it at a glance; the exact day is a click away in the document.
+        case -34 ... -7:   return "\(weeks(from: -days)) ago"
+        case ..<(-34):     return "\(months(from: -days)) ago"
+        case 7...34:       return "in \(weeks(from: days))"
         default:           return Library.shortDate(due)
         }
+    }
+
+    private func weeks(from days: Int) -> String {
+        let count = max(1, Int((Double(days) / 7).rounded()))
+        return count == 1 ? "a week" : "\(count) weeks"
+    }
+
+    private func months(from days: Int) -> String {
+        let count = max(1, Int((Double(days) / 30.4).rounded()))
+        return count == 1 ? "a month" : "\(count) months"
     }
 }
 
