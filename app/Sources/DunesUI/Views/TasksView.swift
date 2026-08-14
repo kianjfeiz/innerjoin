@@ -353,9 +353,11 @@ private struct Settled: View {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 22, weight: .light))
                 .foregroundStyle(Glass.Ink.faint)
+            // The sentence that is the whole point of the screen, so it leads rather
+            // than sitting at the same weight as the note explaining it.
             Text("Nothing is waiting on you.")
-                .font(Glass.Font.body)
-                .foregroundStyle(Glass.Ink.secondary)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Glass.Ink.primary.opacity(0.8))
             Text("Dates and loose ends appear here as your files are understood.")
                 .font(Glass.Font.footnote)
                 .foregroundStyle(Glass.Ink.tertiary)

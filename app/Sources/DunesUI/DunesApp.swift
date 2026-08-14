@@ -94,6 +94,14 @@ enum Harness {
         // Long enough for the library read the launch state kicked off to land.
         try? await Task.sleep(for: .milliseconds(900))
 
+        // DUNES_SETTLE ticks the first task off and draws the moment afterwards — the
+        // half-second a person actually sees when they finish something, which is the
+        // state most worth looking at and the one hardest to catch by hand. It goes
+        // through the real `finish`, so the picture is of the shipping path and not of
+        // a pose arranged for the camera.
+        if environment["DUNES_SETTLE"] != nil, let first = model.tasks.first {
+            model.finish(first)
+        }
         FileHandle.standardError.write(Data(
             "render: mode=\(model.mode) tasks=\(model.tasks.count) loading=\(model.loadingRows)\n".utf8))
         let height = model.mode == .ask ? Glass.restSize.height : Glass.openSize.height
