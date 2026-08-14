@@ -15,9 +15,18 @@ enum Glass {
     static let restSize = CGSize(width: 560, height: 340)
     static let openSize = CGSize(width: 560, height: 520)
 
+    /// What the hidden title bar reserves. SwiftUI adds it to whatever height the
+    /// content declares, so the panel declares itself this much shorter and overflows
+    /// back up into the strip — leaving the window exactly as tall as the glass, with
+    /// no invisible slack hanging off either end.
+    static let titlebarStrip: CGFloat = 32
+
     enum Radius {
         /// The window itself. Large, so the panel reads as a single soft object.
         static let panel: CGFloat = 26
+        /// The frame around it. Concentric with the panel — the panel's radius plus
+        /// the band between them — so the two curves nest instead of fighting.
+        static let frame: CGFloat = panel + Space.band
         static let field: CGFloat = 14
         static let control: CGFloat = 10
         static let pill: CGFloat = 999
@@ -30,6 +39,10 @@ enum Glass {
         static let inner: CGFloat = 14
         static let edge: CGFloat = 22
         static let gap: CGFloat = 18
+        /// The thickness of the glass frame the panel sits in. Thick enough to read as
+        /// a body of glass with a near and a far surface — thinner and it flattens
+        /// into a stroke, which is the difference between a lens and a border.
+        static let band: CGFloat = 15
     }
 
     // MARK: - Type
@@ -94,14 +107,119 @@ enum Glass {
     /// Liquid Glass has its own physics — shapes stretch toward each other and settle.
     /// These curves are chosen to agree with it: nothing linear, nothing that overshoots
     /// hard enough to wobble.
+    ///
+    /// One choreography rule, everywhere: what leaves goes quickly and travels nowhere,
+    /// because the panel itself is already moving and a second journey on top of the
+    /// resize is how a morph turns into a wobble. What arrives comes a beat later,
+    /// rising into geometry that has already settled. Exits are logistics; entrances
+    /// are the show.
     enum Motion {
-        /// Mode changes, where the panel morphs and resizes.
-        static let morph = Animation.smooth(duration: 0.38, extraBounce: 0.08)
+        /// Mode changes, where the panel morphs and resizes. A hint of bounce, because
+        /// glass that stops dead reads as a cut rather than a stretch.
+        static let morph = Animation.smooth(duration: 0.42, extraBounce: 0.1)
         /// Hover and press.
-        static let touch = Animation.smooth(duration: 0.16)
+        static let touch = Animation.smooth(duration: 0.15)
         /// Content arriving inside a settled panel.
-        static let arrive = Animation.smooth(duration: 0.26)
-        static let stagger: Double = 0.04
+        static let arrive = Animation.smooth(duration: 0.3)
+        /// Content leaving. A plain ease-out: an exit should be over before anyone
+        /// studies it.
+        static let depart = Animation.easeOut(duration: 0.14)
+        static let stagger: Double = 0.045
+
+        /// One branch of the panel handing off to another. The leaver fades in place
+        /// and carries its own timing, so it needs nothing from the transaction; the
+        /// arriving branch is `.identity` because its children stage their own
+        /// entrances with `arrives`, and a container fade on top would gate their
+        /// stagger behind a second curtain.
+        static var handoff: AnyTransition {
+            .asymmetric(insertion: .identity, removal: .opacity.animation(depart))
+        }
+
+        /// Something appearing in place, a beat after the layout around it has settled.
+        /// Used for content the panel produces on its own — working notes, sources —
+        /// where the pause before arrival is what makes it read as an event.
+        static func settle(after delay: Double = 0, from distance: CGFloat = 6) -> AnyTransition {
+            .asymmetric(
+                insertion: AnyTransition.opacity.combined(with: .offset(y: distance))
+                    .animation(arrive.delay(delay)),
+                removal: .opacity.animation(depart)
+            )
+        }
+    }
+}
+
+// MARK: - The frame
+
+/// The band of glass the panel sits in — the app's outer edge.
+///
+/// It is thick glass rather than a border: a lens gathers light along its rim, goes
+/// briefly dark where the surface curves away from you, and throws a sheen across the
+/// shoulder it faces the light with. Those three things, layered over real Liquid
+/// Glass, are what make an edge read as *depth* rather than as a drawn line.
+///
+/// It also gives that band something to be. Empty padding is not hit-tested and holds
+/// no pixels of its own, so clicks fell through it to the desktop; a surface here
+/// makes the whole frame part of the app.
+struct WindowGlass: View {
+    @Environment(\.colorScheme) private var scheme
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: Glass.Radius.frame, style: .continuous)
+    }
+
+    var body: some View {
+        Color.clear
+            .glassEffect(
+                .regular.tint(Glass.sand.opacity(scheme == .dark ? 0.06 : 0.10)),
+                in: .rect(cornerRadius: Glass.Radius.frame, style: .continuous)
+            )
+            // The rim gathers light: a wide, soft band just inside the outer edge,
+            // where a thick curved surface concentrates what passes through it.
+            .overlay(
+                shape
+                    .strokeBorder(Color.white.opacity(scheme == .dark ? 0.16 : 0.32),
+                                  lineWidth: 8)
+                    .blur(radius: 6)
+                    .allowsHitTesting(false)
+            )
+            // The bevel. Brightest along the top, where light falls, and lit again
+            // along the bottom where it bounces back up through the glass.
+            .overlay(
+                shape.strokeBorder(
+                    LinearGradient(
+                        stops: [
+                            .init(color: .white.opacity(scheme == .dark ? 0.5 : 0.95), location: 0),
+                            .init(color: .white.opacity(scheme == .dark ? 0.08 : 0.16), location: 0.5),
+                            .init(color: .white.opacity(scheme == .dark ? 0.28 : 0.6), location: 1),
+                        ],
+                        startPoint: .top, endPoint: .bottom
+                    ),
+                    lineWidth: 1
+                )
+                .allowsHitTesting(false)
+            )
+            // No line is drawn on the band's inner edge, and that is the whole
+            // discipline here. A lens wants a far surface, and the obvious way to get
+            // one is to stroke it — but the panel already draws its own edge a pixel
+            // away, so any stroke here lands beside that one and the eye reads two
+            // rings where there is one object. The depth comes from the gradient
+            // instead: the rim glow above falls off across the band, and the panel's
+            // shadow darkens its inner end. Same falloff, no second outline.
+            //
+            // The sheen: one soft diagonal fall across the upper shoulder. A lens has
+            // a highlight, and it is never centred.
+            .overlay(
+                LinearGradient(
+                    stops: [
+                        .init(color: .white.opacity(scheme == .dark ? 0.1 : 0.16), location: 0),
+                        .init(color: .clear, location: 0.42),
+                    ],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                .clipShape(shape)
+                .allowsHitTesting(false)
+            )
+            .clipShape(shape)
     }
 }
 
@@ -170,24 +288,39 @@ struct PanelButton: View {
 
 extension View {
     /// Fade and rise, once. 6pt — enough to read as arriving, not enough to look thrown.
-    func arrives(_ index: Int = 0) -> some View { modifier(Arrive(index: index)) }
+    /// Indexed calls stagger, each next thing landing half a beat behind the last.
+    func arrives(_ index: Int = 0) -> some View {
+        modifier(Arrive(delay: Double(index) * Glass.Motion.stagger))
+    }
+
+    /// The same gesture, tuned: after how long, from how far, on what curve. Driven by
+    /// `onAppear` rather than a transition, so it fires no matter how the view entered
+    /// the hierarchy — including as a child of a branch that was swapped in whole.
+    func arrives(after delay: Double, from distance: CGFloat = 6,
+                 on animation: Animation = Glass.Motion.arrive) -> some View {
+        modifier(Arrive(delay: delay, distance: distance, animation: animation))
+    }
 }
 
 struct Arrive: ViewModifier {
-    let index: Int
+    var delay: Double = 0
+    var distance: CGFloat = 6
+    var animation: Animation = Glass.Motion.arrive
     @State private var shown = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
             .opacity(shown ? 1 : 0)
-            .offset(y: shown ? 0 : 6)
+            .offset(y: shown || reduceMotion ? 0 : distance)
             .onAppear {
                 guard !shown else { return }
-                if reduceMotion { shown = true } else {
-                    withAnimation(Glass.Motion.arrive.delay(Double(index) * Glass.Motion.stagger)) {
-                        shown = true
-                    }
+                // Reduced motion means no travel, not no grace: the offset is already
+                // zeroed above, and a short fade remains — a pop is its own jolt.
+                if reduceMotion {
+                    withAnimation(.easeOut(duration: 0.2)) { shown = true }
+                } else {
+                    withAnimation(animation.delay(delay)) { shown = true }
                 }
             }
     }

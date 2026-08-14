@@ -65,6 +65,7 @@ final class AppModel {
     var draft = ""
 
     private let library: Library
+    private var answerTask: Task<Void, any Error>?
 
     init(library: Library = Library()) {
         self.library = library
@@ -85,13 +86,16 @@ final class AppModel {
         let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isAnswering else { return }
 
+        answerTask?.cancel()
         draft = ""
-        turn = Turn(question: trimmed)
+        let current = Turn(question: trimmed)
+        turn = current
         mode = .answering
 
-        Task { [library] in
+        answerTask = Task { [library] in
             for try await chunk in library.answer(trimmed) {
-                guard turn != nil else { return }
+                // A superseded stream must never write into a newer turn.
+                guard turn?.id == current.id else { return }
                 switch chunk {
                 case .working(let note):  turn?.working = note
                 case .text(let body):     turn?.working = nil; turn?.text += body
@@ -106,6 +110,7 @@ final class AppModel {
 
     func browse(_ scope: Mode.Scope) {
         guard mode != .browsing(scope) else { return dismiss() }
+        answerTask?.cancel()
         mode = .browsing(scope)
         rows = []
         loadingRows = true
@@ -139,9 +144,13 @@ final class AppModel {
     }
 
     /// Back to the resting panel. One way out of every mode, bound to Escape.
+    ///
+    /// The turn and rows deliberately survive: the departing view is still on screen
+    /// for its exit fade, and a view emptied mid-fade reads as a glitch, not an exit.
+    /// `ask` and `browse` replace them on the way in; the cancel stops a stale stream
+    /// from narrating to nobody.
     func dismiss() {
-        turn = nil
-        rows = []
+        answerTask?.cancel()
         mode = .ask
     }
 }
