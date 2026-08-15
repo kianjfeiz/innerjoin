@@ -256,9 +256,9 @@ final class Library: @unchecked Sendable {
             // that sentence is no use at all to the person who is running this from
             // source and can fix it in ten seconds. This line is for them, on stderr,
             // where a shipped app has no reader and a terminal does.
-            FileHandle.standardError.write(Data(
-                "dunes: no model key. Set DUNES_API_KEY, put it in app/.env.local, "
-                + "or add DUNESAPIKey to Info.plist.\n".utf8))
+            let hint = "dunes: no model key. Set DUNES_API_KEY, put it in "
+                + "app/.env.local, or add DUNESAPIKey to Info.plist.\n"
+            FileHandle.standardError.write(Data(hint.utf8))
         }
         cachedSettings = settings
         return settings
