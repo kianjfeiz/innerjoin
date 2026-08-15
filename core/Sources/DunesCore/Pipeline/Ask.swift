@@ -116,7 +116,18 @@ public struct Ask: Sendable {
         do {
             data = try await provider.extract(
                 system: Ask.system,
-                user: "Question: \(question)\n\n---\n\(context)",
+                user: """
+                    Question: \(question)
+
+                    ---
+                    Below is what keyword search pulled out of their library. It is a \
+                    guess at what's relevant, not a finding. If it bears on the question, \
+                    use it and cite it. If it doesn't — search matched a word rather than \
+                    a meaning — ignore it completely and answer the question on its own \
+                    merits, without mentioning their files or what they contain.
+
+                    \(context)
+                    """,
                 schema: Ask.schema,
                 maxTokens: maxOutputTokens
             )
@@ -181,7 +192,8 @@ public struct Ask: Sendable {
         let documents = (try? store.counts().documents) ?? 0
         let subjects = ((try? store.graphHealth().hubs) ?? []).prefix(3).map(\.name)
         let holdings = if documents == 0 {
-            "nothing at all yet — no files have been added"
+            "nothing at all yet — no files added, though they can add some with "
+                + "`dunes add ~/Documents`"
         } else if subjects.isEmpty {
             "\(documents) document\(documents == 1 ? "" : "s"), not yet understood"
         } else {
@@ -196,15 +208,18 @@ public struct Ask: Sendable {
                     Question: \(question)
 
                     ---
-                    No material. Their library was searched and nothing in it matched. \
-                    It holds \(holdings).
+                    Nothing in their library matched, so there is nothing to cite. \
+                    Answer the question yourself, marked as your own knowledge per the \
+                    rules. If they weren't asking a question, just talk to them.
 
-                    There is nothing to cite, so cite nothing. Answer from your own \
-                    knowledge if you have it, marked as such in the sentence, per the \
-                    rules. If you don't, say so, and say what their library does hold so \
-                    the next question can be aimed. If their library is empty, tell them \
-                    they can fill it with `dunes add ~/Documents`. If they were not \
-                    asking a question at all, just talk to them.
+                    Say something about their library only if the question was about \
+                    their own documents. If it wasn't — a film, a fact, a greeting, \
+                    anything of yours to answer — do not mention their files, their \
+                    contents, or that you looked. They know what's in there. Being told \
+                    what their paperwork is about, in an answer about something else, \
+                    reads as a machine that only knows one thing.
+
+                    For when it is relevant: their library holds \(holdings).
                     """,
                 schema: Ask.schema,
                 maxTokens: maxOutputTokens

@@ -162,8 +162,13 @@ final class Library: @unchecked Sendable {
             let work = Task {
                 do {
                     let store = try open()
-                    let count = try store.counts().documents
-                    continuation.yield(.working("Searching \(count) file\(count == 1 ? "" : "s")"))
+                    // Not "Searching 10 files". Retrieval is a local FTS query that has
+                    // already finished by the time anyone could read the words, and
+                    // announcing it on every question told somebody asking about a film
+                    // that their paperwork was being rifled through. The note that means
+                    // something — "Reading 3 documents" — comes below, and only when
+                    // documents were actually worth reading.
+                    continuation.yield(.working("Thinking"))
 
                     let settings = providerSettings()
                     guard settings.apiKey?.isEmpty == false else {

@@ -136,8 +136,13 @@ private func nothingMatches() async throws {
 
         await expectEqual(provider.calls, 1,
                           "a question retrieval can't help with is still a question")
-        await expect(provider.lastUser.contains("No material"),
+        await expect(provider.lastUser.contains("Nothing in their library matched"),
                      "and the model is told it has nothing to work from")
+        // The bug this replaced: the model was handed a summary of the library and told
+        // to recite it, so a question about a film came back listing the person's
+        // accountancy paperwork.
+        await expect(provider.lastUser.contains("do not mention their files"),
+                     "and told not to bring the library up when it isn't the subject")
         await expect(!provider.lastUser.contains("[d"),
                      "with no document handed to it")
 
@@ -160,7 +165,7 @@ private func nothingToSearch() async throws {
         await expect(provider.lastUser.contains("nothing at all yet"),
                      "and the model is told the library is empty")
         await expect(provider.lastUser.contains("dunes add"),
-                     "so it can say how to fill it")
+                     "so it can say how to fill it — but only because it is empty")
         await expect(!answer.answered, "nothing was answered from the library")
     }
 }
