@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The whole visual language, in one file.
@@ -19,20 +20,10 @@ enum Glass {
     /// because a sign-in that fills the screen looks like it wants more than it does.
     static let welcomeSize = CGSize(width: 560, height: 392)
 
-    /// What the window actually measures: the tallest the glass ever gets, plus the
-    /// transparent room its shadow falls into. Constant, because a window that resizes
-    /// resizes in one step while the glass inside it animates — which is what made the
-    /// morph judder.
-    static var windowSize: CGSize {
-        CGSize(width: openSize.width + Space.shadowRoom * 2,
-               height: openSize.height + Space.shadowRoom * 2)
-    }
-
-    /// What the hidden title bar reserves. SwiftUI adds it to whatever height the
-    /// content declares, so the panel declares itself this much shorter and overflows
-    /// back up into the strip — leaving the window exactly as tall as the glass, with
-    /// no invisible slack hanging off either end.
-    static let titlebarStrip: CGFloat = 32
+    /// The window is the app and nothing else: `restSize.width` across, and as tall as
+    /// whichever state is showing. There is no reserved slack and no transparent margin,
+    /// so every point inside the window belongs to the app and every point outside it
+    /// belongs to the desktop. `WindowHeight` is what keeps that true through a morph.
 
     enum Radius {
         /// The window itself. Large, so the panel reads as a single soft object.
@@ -56,10 +47,6 @@ enum Glass {
         /// a body of glass with a near and a far surface — thinner and it flattens
         /// into a stroke, which is the difference between a lens and a border.
         static let band: CGFloat = 15
-        /// Transparent room kept around the glass for its own shadow to fall into.
-        /// The window is this much bigger than the app on every side, and none of it
-        /// is ever drawn.
-        static let shadowRoom: CGFloat = 14
     }
 
     // MARK: - Type
@@ -217,6 +204,68 @@ struct ScrollOrStack<Content: View>: View {
                 // panel that morphs into one, that flash arrives in the middle of the
                 // morph and reads as a piece of chrome popping in.
                 .scrollIndicators(.never)
+        }
+    }
+}
+
+// MARK: - The window
+
+/// Resizes the window itself, one animation frame at a time.
+///
+/// SwiftUI will size a window from its content, but only from the content's *settled*
+/// layout: change the height inside an animation and the window arrives at the new size
+/// immediately while the content spends the next 0.42s catching up. That gap is the whole
+/// reason this app once kept a constant, oversized window and animated a smaller pane of
+/// glass inside it — and the reason it had a rim of dead, transparent space that looked
+/// like the app but wasn't.
+///
+/// `Animatable` closes the gap. Declaring `animatableData` makes SwiftUI interpolate the
+/// height and re-evaluate this modifier on every frame, so `updateNSView` is handed each
+/// intermediate value in turn and sets it on the window. The window traces the same curve
+/// the glass would have, which means the glass no longer needs a curve of its own: it
+/// simply fills whatever the window currently is.
+struct WindowHeight: ViewModifier, @MainActor Animatable {
+    var height: CGFloat
+
+    init(_ height: CGFloat) { self.height = height }
+
+    var animatableData: CGFloat {
+        get { height }
+        set { height = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.background(Sizer(height: height).allowsHitTesting(false))
+    }
+
+    /// The one place the window's frame is written.
+    private struct Sizer: NSViewRepresentable {
+        var height: CGFloat
+
+        func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+
+        func updateNSView(_ view: NSView, context: Context) {
+            // The view is not in a window yet on the first pass, and asking AppKit to
+            // resize during SwiftUI's own layout is how you get a layout loop. One hop
+            // costs a frame at launch and nothing during a morph, which is already
+            // running a frame behind.
+            let target = height
+            DispatchQueue.main.async {
+                guard let window = view.window else { return }
+                var frame = window.frame
+                guard abs(frame.height - target) > 0.5
+                        || abs(frame.width - Glass.restSize.width) > 0.5 else { return }
+                // The top edge stays put and the window grows downward, so the panel
+                // opens away from the wordmark rather than sliding the whole app up the
+                // screen. AppKit measures from the bottom-left, hence the arithmetic.
+                frame.origin.y = frame.maxY - target
+                frame.size = CGSize(width: Glass.restSize.width, height: target)
+                window.setFrame(frame, display: true)
+                // The shadow is AppKit's again now that the window changes shape, and
+                // AppKit caches it. Resizing invalidates it; saying so explicitly costs
+                // nothing and covers the frame where it doesn't.
+                window.invalidateShadow()
+            }
         }
     }
 }

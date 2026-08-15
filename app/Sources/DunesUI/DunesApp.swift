@@ -24,9 +24,15 @@ struct DunesApp: App {
                 .containerBackground(.clear, for: .window)
                 // The frame the panel sits in is drawn by Panel itself, so that it is
                 // sized by the glass rather than by the window — see WindowGlass.
+                //
+                // And the window is exactly that glass: no margin, no reserved slack.
+                // Its height is written by WindowHeight, frame by frame through a morph.
         }
         .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        // Not `.contentSize`: that measures the content's settled layout and resizes
+        // the window in one step, which is precisely what WindowHeight exists to
+        // interpolate. The panel fills the window and the window is set by hand.
+        .windowResizability(.automatic)
         .windowBackgroundDragBehavior(.enabled)
         .defaultWindowPlacement { _, context in
             // Slightly above centre, where a person's eye already is.
@@ -157,17 +163,21 @@ enum Harness {
             // Without this the hidden title bar adds its own height to the window, and
             // that surplus is the strip the frame cannot cover evenly.
             window.styleMask.insert(.fullSizeContentView)
+            // The panel has one width and four heights, all of them chosen. A window a
+            // person can drag to any size would have neither.
+            window.styleMask.remove(.resizable)
             window.makeKeyAndOrderFront(nil)
             // The panel draws its own corners, so the window must not paint a
             // background — otherwise a grey rectangle shows through behind the radius.
             window.isOpaque = false
             window.backgroundColor = .clear
-            // The panel draws its own shadow. AppKit's is derived from the window's
-            // alpha and then cached, and the window no longer changes size while the
-            // glass inside it does — so the system shadow would keep the shape of
-            // whichever mode was tallest and hang below the panel as a rectangle of
-            // nothing.
-            window.hasShadow = false
+            // AppKit draws the shadow again. It has to: with the window ending exactly
+            // where the glass does, a shadow drawn in SwiftUI would have nowhere to
+            // fall and would be clipped at the corner it was meant to soften. The stale
+            // shadow this used to cause was a symptom of a window that never resized —
+            // now that the window changes shape, resizing invalidates it, and
+            // WindowHeight says so explicitly on every step.
+            window.hasShadow = true
             window.isMovableByWindowBackground = true
             window.titlebarAppearsTransparent = true
             for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
