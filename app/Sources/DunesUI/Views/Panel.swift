@@ -49,19 +49,17 @@ struct Panel: View {
             Footer(mode: model.mode, signingIn: model.needsSignIn)
         }
         .padding(Glass.Space.edge)
-        // The app, and the whole of it: one pane of Liquid Glass.
+        // The single Liquid Glass surface in the app.
         //
-        // One, for a reason beyond taste: glass cannot sample other glass, so a pane of
-        // glass sitting on a pane of glass renders the inner one flat and dead. This
-        // samples the desktop behind the window and refracts it; everything inside is
-        // drawn with plain translucent fills that read as frosted because of what they
-        // sit on.
+        // One, deliberately: glass cannot sample other glass, so a panel of glass holding
+        // buttons of glass renders the buttons flat and dead. This samples the desktop
+        // behind the window and refracts it; everything inside is drawn with plain
+        // translucent fills that read as frosted because of what they sit on.
         .glassEffect(
             .regular.tint(Glass.sand.opacity(scheme == .dark ? 0.05 : 0.08)),
             in: .rect(cornerRadius: Glass.Radius.panel, style: .continuous)
         )
-        // A hairline of light along the top edge, the way a real bevel catches it. The
-        // app's only outline now, which is the point — one ring around one object.
+        // A hairline of light along the top edge, the way a real bevel catches it.
         .overlay(
             RoundedRectangle(cornerRadius: Glass.Radius.panel, style: .continuous)
                 .strokeBorder(
@@ -74,18 +72,26 @@ struct Panel: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: Glass.Radius.panel, style: .continuous))
-        // The glass fills the window exactly. It *is* the window.
+        // Cast onto the frame behind it rather than onto the desktop — the shadow is
+        // now what separates the panel from the glass it sits in, and that separation
+        // is most of what reads as depth.
+        .shadow(color: .black.opacity(scheme == .dark ? 0.5 : 0.18), radius: 12, y: 4)
+        .padding(Glass.Space.band)
+        // The glass fills the window exactly, rather than being given a height of its
+        // own inside a larger one.
         //
-        // There was a second, wider pane behind this one — a band of see-through glass
-        // framing the panel — and around that a margin of clear window for the shadow
-        // to fall into. Both are gone. Two concentric rounded rectangles read as a
-        // window inside a window, and neither the band nor the margin held anything:
-        // no content, no controls, nothing to click. An app should end where it looks
-        // like it ends, and this one now does — one edge, and the desktop past it.
+        // There used to be a margin of clear window around it — room for a SwiftUI
+        // shadow, plus the difference between the tallest mode and the current one. It
+        // was invisible, and that was the problem: it swallowed clicks that landed on
+        // what looked like the app, and any pointer within fourteen points of the edge
+        // was really pointing at the desktop. An app should end where it looks like it
+        // ends.
         //
-        // Filling rather than being given a height of its own also means height has
-        // exactly one owner, the window. There is no second measurement to drift.
+        // With no margin, height has exactly one owner — the window — and the glass
+        // takes whatever that is. Nothing can drift out of step with anything, because
+        // there is no second measurement to drift.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WindowGlass())
         // …and the window is resized frame by frame, by the same animation.
         //
         // This is what the clear margin was there to avoid. `.contentSize` sizes a

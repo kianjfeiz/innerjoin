@@ -171,13 +171,20 @@ enum Harness {
             // background — otherwise a grey rectangle shows through behind the radius.
             window.isOpaque = false
             window.backgroundColor = .clear
-            // AppKit draws the shadow again. It has to: with the window ending exactly
-            // where the glass does, a shadow drawn in SwiftUI would have nowhere to
-            // fall and would be clipped at the corner it was meant to soften. The stale
-            // shadow this used to cause was a symptom of a window that never resized —
-            // now that the window changes shape, resizing invalidates it, and
-            // WindowHeight says so explicitly on every step.
-            window.hasShadow = true
+            // No shadow, from anywhere.
+            //
+            // A window shadow is drawn *outside* the window, so it is the one part of
+            // the app a person can see and cannot touch: a soft dark ring that looks
+            // like it belongs to the panel, sitting on the desktop, passing every click
+            // straight through to whatever is behind. On a small floating panel with a
+            // glass edge of its own, it read as a third container — an outer one, made
+            // of nothing.
+            //
+            // Without it the app ends at its own edge and every visible pixel is live.
+            // The depth that mattered is still there and is drawn *inside*: the panel
+            // casts onto the band of glass around it, which is a shadow that is part of
+            // the app rather than a halo around it.
+            window.hasShadow = false
             window.isMovableByWindowBackground = true
             window.titlebarAppearsTransparent = true
             for button in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
