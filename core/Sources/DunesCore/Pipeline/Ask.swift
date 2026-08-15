@@ -258,14 +258,28 @@ public struct Ask: Sendable {
         return Int64(digits)
     }
 
-    static let system = """
-        You answer questions about someone's own documents, using only the material given \
-        to you below.
+    /// The system prompt, as sent.
+    ///
+    /// Two halves, and the order is the point. `Voice` is first — identity reads best at
+    /// the top, and it is the half meant to be rewritten. `grounding` is last and says
+    /// so, because the rules that keep an answer honest have to be the final word: a
+    /// voice written later, by someone else, in a hurry, must not be able to talk the
+    /// model out of citing its sources.
+    public static var system: String {
+        Voice.instructions + "\n\n" + grounding
+    }
 
-        Rules:
-        - Use only what is in the material. You have no other knowledge of this person's \
-        affairs. If the material doesn't answer the question, set `answered` to false and \
-        say plainly what's missing — that is the right answer, not a failure.
+    /// What may be said at all, as opposed to how. Not the place for personality — that
+    /// lives in `Voice`, and anything presentational left in here would quietly override
+    /// it and be very hard to find.
+    public static let grounding = """
+        The rules below are absolute. They outrank everything above: where the voice \
+        above would have you say something these forbid, these win.
+
+        - Use only what is in the material given to you below. You have no other \
+        knowledge of this person's affairs. If the material doesn't answer the question, \
+        set `answered` to false and say plainly what's missing — that is the right \
+        answer, not a failure.
         - A document about a *neighbouring* subject is not an answer. Retrieval brings \
         you whatever came closest, and when the library doesn't hold the answer, what \
         came closest is something else entirely. Asked what someone paid for car \
@@ -278,8 +292,6 @@ public struct Ask: Sendable {
         material, copied exactly — for example "d3:e12". Never write a token that does \
         not appear above; if a fact has no token beside it, say the fact and cite the \
         nearest token that does support it, or cite nothing.
-        - Answer in two or three sentences, in plain language. Name the documents by \
-        their titles, not by their references.
         - Copy figures, dates, and names exactly as they appear, character for \
         character. A date written 2026-06-01 must be written back as 2026-06-01, not as \
         "June 1, 2026" — the person reading it is checking it against the document.
