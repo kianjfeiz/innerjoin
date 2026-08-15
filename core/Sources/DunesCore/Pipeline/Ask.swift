@@ -95,9 +95,25 @@ public struct Ask: Sendable {
     }
 
     public func answer(_ question: String) async throws -> Answer {
+        // What this app will and won't answer is one editable list — see Policy. Rules
+        // get two chances to speak, and which one they take is the difference between
+        // a gate and a better error message.
+        //
+        // Here, before retrieval: for the few that outrank the library, so a greeting
+        // never touches the database or the model.
+        if let rule = Policy.refusalBeforeRetrieval(question) {
+            return Answer(question: question, text: rule.reply,
+                          answered: false, citations: [], invented: 0, consulted: [])
+        }
+
         let hits = try store.retrieve(question, limit: breadth)
         guard !hits.isEmpty else {
-            return Answer(question: question, text: nothingMatched(),
+            // And here, once the library has been asked and had nothing: a rule that
+            // knows what kind of question this was can say something more useful than
+            // "nothing in your files mentions that" — without ever having stood between
+            // the person and their own documents.
+            let text = Policy.refusalAfterEmptyRetrieval(question)?.reply ?? nothingMatched()
+            return Answer(question: question, text: text,
                           answered: false, citations: [], invented: 0, consulted: [])
         }
 

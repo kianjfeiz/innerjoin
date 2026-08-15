@@ -161,6 +161,17 @@ final class Library: @unchecked Sendable {
         AsyncThrowingStream { continuation in
             let work = Task {
                 do {
+                    // The policy gate first — before the library is opened and before
+                    // the key is read. A question the app has already decided not to
+                    // answer needs neither, and "Searching 10 files" is the wrong thing
+                    // to flash at someone who only said hello.
+                    if let rule = Policy.refusalBeforeRetrieval(question) {
+                        continuation.yield(.text(rule.reply))
+                        continuation.yield(.done)
+                        continuation.finish()
+                        return
+                    }
+
                     let store = try open()
                     let count = try store.counts().documents
                     continuation.yield(.working("Searching \(count) file\(count == 1 ? "" : "s")"))

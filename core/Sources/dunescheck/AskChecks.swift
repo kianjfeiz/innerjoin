@@ -28,7 +28,7 @@ final class CountingProvider: ModelProvider, @unchecked Sendable {
 
 /// Two documents in a library, both understood, so retrieval has something to choose
 /// between and citations have somewhere to land.
-private func withLibrary(_ body: (Store, Int64, Int64) async throws -> Void) async throws {
+func withLibrary(_ body: (Store, Int64, Int64) async throws -> Void) async throws {
     try await withWorkspace { store in
         let ingest = Ingest(store: store)
         let lease = try await ingest.add(fileAt: try fixture("lease.pdf"))

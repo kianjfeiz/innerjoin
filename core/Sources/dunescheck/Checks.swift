@@ -53,6 +53,7 @@ struct Checks {
         await providerChecks()
         await anchorFormatChecks()
         await askChecks()
+        await policyChecks()
         await peopleChecks()
         await nicknameDataChecks()
         await scrutinyChecks()
