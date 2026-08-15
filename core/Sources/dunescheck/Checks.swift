@@ -53,7 +53,6 @@ struct Checks {
         await providerChecks()
         await anchorFormatChecks()
         await askChecks()
-        await policyChecks()
         await voiceChecks()
         await peopleChecks()
         await nicknameDataChecks()

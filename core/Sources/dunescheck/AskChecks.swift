@@ -8,8 +8,8 @@ func askChecks() async {
     await check("an answer's citations resolve to a page and a box", citationsResolve)
     await check("an invented citation is dropped, not shown", inventedCitationDropped)
     await check("a citation to a document not consulted is refused", crossDocumentCitation)
-    await check("nothing matching means no model call and an honest answer", nothingMatches)
-    await check("an empty library says how to fill it", nothingToSearch)
+    await check("a miss still reaches the model, empty-handed", nothingMatches)
+    await check("an empty library is answered, not refused", nothingToSearch)
     await check("a confident answer with no words is not passed off as one", emptyAnswer)
     await check("the same citation twice is shown once", duplicateCitations)
 }
@@ -18,10 +18,14 @@ func askChecks() async {
 final class CountingProvider: ModelProvider, @unchecked Sendable {
     let json: String
     private(set) var calls = 0
+    /// What the model was actually shown. Checking that a miss travels *empty* matters
+    /// more than checking it travels at all.
+    private(set) var lastUser = ""
     init(json: String) { self.json = json }
     var label: String { "Counting" }
     func extract(system: String, user: String, schema: [String: Any], maxTokens: Int) async throws -> Data {
         calls += 1
+        lastUser = user
         return Data(json.utf8)
     }
 }
@@ -122,37 +126,42 @@ private func crossDocumentCitation() async throws {
 }
 
 private func nothingMatches() async throws {
-    try await withLibrary { store, _, _ in
-        let provider = CountingProvider(json: #"{"answered":true,"answer":"Sure!","citations":[]}"#)
+    try await withLibrary { store, leaseID, _ in
+        // The model is told to cite, and offered a document that was never retrieved.
+        let provider = CountingProvider(
+            json: #"{"answered":true,"answer":"Not in your files, but submarines are "#
+                + #"expensive.","citations":[{"cite":"d"# + "\(leaseID)" + #":e0"}]}"#)
         let answer = try await Ask(store: store, provider: provider)
             .answer("what did the submarine cost")
 
-        await expect(!answer.answered, "an unanswerable question is answered honestly")
-        await expectEqual(provider.calls, 0,
-                          "and the model is never called, so a miss is free")
-        await expect(answer.citations.isEmpty, "with nothing cited")
+        await expectEqual(provider.calls, 1,
+                          "a question retrieval can't help with is still a question")
+        await expect(provider.lastUser.contains("No material"),
+                     "and the model is told it has nothing to work from")
+        await expect(!provider.lastUser.contains("[d"),
+                     "with no document handed to it")
 
-        // "Nothing mentions that" is true and nearly useless: it leaves a person
-        // guessing whether they asked badly, whether the file they meant was ever
-        // added, or whether the thing is broken. The library can answer all three, so
-        // the refusal says what it does hold and the next question can be aimed.
-        await expect(answer.text.contains("file"),
-                     "the refusal says how much it looked through")
-        await expect(!answer.text.hasSuffix("mentions that."),
-                     "and doesn't stop at the dead end")
+        // The safety property. Nothing was retrieved, so nothing can be cited — a
+        // citation proposed anyway points at a document the model never saw.
+        await expect(answer.citations.isEmpty, "a citation invented over nothing is dropped")
+        await expect(!answer.answered,
+                     "and `answered` stays false, because the library answered nothing")
+        await expect(!answer.text.isEmpty, "while the person still gets a reply")
     }
 }
 
-/// The same refusal, with nothing in the library at all — where the useful thing to
-/// say is not "no match" but how to put something in it.
+/// An empty library is a library with nothing in it, not a broken app. It answers, and
+/// the model is told there is nothing there so it can say what to do about it.
 private func nothingToSearch() async throws {
     try await withWorkspace { store in
-        let provider = CountingProvider(json: #"{"answered":true,"answer":"x","citations":[]}"#)
+        let provider = CountingProvider(json: #"{"answered":false,"answer":"Nothing in there yet.","citations":[]}"#)
         let answer = try await Ask(store: store, provider: provider).answer("anything at all")
-        await expect(!answer.answered, "an empty library answers nothing")
-        await expectEqual(provider.calls, 0, "without calling a model")
-        await expect(answer.text.contains("dunes add"),
-                     "and says how to put something in it")
+        await expectEqual(provider.calls, 1, "an empty library is still answered")
+        await expect(provider.lastUser.contains("nothing at all yet"),
+                     "and the model is told the library is empty")
+        await expect(provider.lastUser.contains("dunes add"),
+                     "so it can say how to fill it")
+        await expect(!answer.answered, "nothing was answered from the library")
     }
 }
 

@@ -95,27 +95,11 @@ public struct Ask: Sendable {
     }
 
     public func answer(_ question: String) async throws -> Answer {
-        // What this app will and won't answer is one editable list — see Policy. Rules
-        // get two chances to speak, and which one they take is the difference between
-        // a gate and a better error message.
-        //
-        // Here, before retrieval: for the few that outrank the library, so a greeting
-        // never touches the database or the model.
-        if let rule = Policy.refusalBeforeRetrieval(question) {
-            return Answer(question: question, text: rule.reply,
-                          answered: false, citations: [], invented: 0, consulted: [])
-        }
-
         let hits = try store.retrieve(question, limit: breadth)
-        guard !hits.isEmpty else {
-            // And here, once the library has been asked and had nothing: a rule that
-            // knows what kind of question this was can say something more useful than
-            // "nothing in your files mentions that" — without ever having stood between
-            // the person and their own documents.
-            let text = Policy.refusalAfterEmptyRetrieval(question)?.reply ?? nothingMatched()
-            return Answer(question: question, text: text,
-                          answered: false, citations: [], invented: 0, consulted: [])
-        }
+        // A miss is not a refusal. Retrieval either found something to reason over or it
+        // didn't; the question gets answered either way, and the only difference is
+        // whether anything citable goes with it.
+        if hits.isEmpty { return try await answerWithoutMaterial(question) }
 
         // Every element of every consulted document, so a citation can be checked and
         // then resolved to its page and box without a second trip.
@@ -178,6 +162,67 @@ public struct Ask: Sendable {
             consulted: hits.compactMap { hit in
                 hit.document.id.map { ($0, hit.document.label, hit.matchedRecord) }
             })
+    }
+
+    /// A miss, answered anyway.
+    ///
+    /// This used to return a canned sentence and stop, which was right when the app only
+    /// knew what was in the library. It isn't any more. This is a model with the library
+    /// wired into it, not a search box that occasionally speaks — so a question retrieval
+    /// can't help with is still a question, and a person saying hello is still a person
+    /// saying hello.
+    ///
+    /// No material goes with it, and that is the safety property rather than an
+    /// omission. With nothing to cite, the model cannot make a claim about this person's
+    /// affairs and satisfy the rules at the same time; anything it says has to be marked
+    /// as its own knowledge. Citations are dropped unread for the same reason — there is
+    /// nothing here they could truthfully point at.
+    private func answerWithoutMaterial(_ question: String) async throws -> Answer {
+        let documents = (try? store.counts().documents) ?? 0
+        let subjects = ((try? store.graphHealth().hubs) ?? []).prefix(3).map(\.name)
+        let holdings = if documents == 0 {
+            "nothing at all yet — no files have been added"
+        } else if subjects.isEmpty {
+            "\(documents) document\(documents == 1 ? "" : "s"), not yet understood"
+        } else {
+            "\(documents) document\(documents == 1 ? "" : "s"), mostly about \(list(subjects))"
+        }
+
+        var data: Data
+        do {
+            data = try await provider.extract(
+                system: Ask.system,
+                user: """
+                    Question: \(question)
+
+                    ---
+                    No material. Their library was searched and nothing in it matched. \
+                    It holds \(holdings).
+
+                    There is nothing to cite, so cite nothing. Answer from your own \
+                    knowledge if you have it, marked as such in the sentence, per the \
+                    rules. If you don't, say so, and say what their library does hold so \
+                    the next question can be aimed. If their library is empty, tell them \
+                    they can fill it with `dunes add ~/Documents`. If they were not \
+                    asking a question at all, just talk to them.
+                    """,
+                schema: Ask.schema,
+                maxTokens: maxOutputTokens
+            )
+        } catch ProviderError.notJSON(let prose) {
+            data = Data(prose.utf8)
+        }
+        let reply = (try? AnswerReply(data: data))
+            ?? AnswerReply(salvaging: String(data: data, encoding: .utf8) ?? "")
+        let text = reply.answer.trimmed
+
+        return Answer(
+            question: question,
+            text: text.isEmpty ? nothingMatched() : text,
+            // False whatever the model says: nothing in the library answered this, and
+            // that flag is about the library, not about whether words came back.
+            answered: false,
+            citations: [], invented: 0, consulted: [])
     }
 
     // MARK: - What the model is allowed to see
