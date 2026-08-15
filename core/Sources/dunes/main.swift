@@ -10,7 +10,7 @@ struct IJParse: AsyncParsableCommand {
         subcommands: [Add.self, Show.self, List.self, Find.self,
                       Understand.self, Record.self, Upcoming.self, Tasks.self, Who.self,
                       Graph.self, Tidy.self, Sort.self, Settle.self, Name.self,
-                      Ask.self, Problems.self, Key.self],
+                      Ask.self, Problems.self, Key.self, ShowPrompt.self],
         defaultSubcommand: Add.self
     )
 }
@@ -818,5 +818,25 @@ struct Key: AsyncParsableCommand {
 extension String {
     func padded(_ length: Int) -> String {
         count >= length ? String(prefix(length)) : padding(toLength: length, withPad: " ", startingAt: 0)
+    }
+}
+
+
+/// Print the system prompt exactly as it is sent.
+///
+/// Writing a voice is a loop — change it, ask something, read the answer, change it
+/// again — and the loop is much shorter when you can see the actual bytes rather than
+/// infer them from two files. Honours DUNES_VOICE, so an override can be checked before
+/// it is trusted.
+struct ShowPrompt: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "prompt",
+        abstract: "Print the system prompt used to answer questions.")
+
+    @Flag(name: .long, help: "Only the voice — the half that is meant to be rewritten.")
+    var voiceOnly = false
+
+    func run() throws {
+        print(voiceOnly ? Voice.instructions : DunesCore.Ask.system)
     }
 }

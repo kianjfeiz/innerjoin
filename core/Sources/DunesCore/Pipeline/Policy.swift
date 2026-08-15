@@ -12,8 +12,11 @@ import Foundation
 /// classifier — a gate that has to phone a model in order to decide whether to phone a
 /// model is not a gate.
 ///
-/// The rules here are a starting set, not a considered position on what an app like this
-/// should refuse. They are meant to be argued with.
+/// The list is deliberately short. This app answers what it's asked — from the person's
+/// files first, and from what it knows when the files don't have it — so a rule here is
+/// not "this subject is off limits", it is "this specific request is not worth what it
+/// costs". At the time of writing that is exactly one thing: generation priced by the
+/// yard.
 public enum Policy {
 
     /// How much of the question a trigger has to account for.
@@ -66,8 +69,8 @@ public enum Policy {
 
         Rule(
             name: "smalltalk",
-            reply: "Hello. Ask me about anything in your files — a date, an amount, a "
-                + "name — and I'll answer from them and show you where it came from.",
+            reply: "Hey. Ask me anything — your own files first, since that's where I'm "
+                + "actually worth something.",
             triggers: [
                 "hi", "hii", "hello", "hey", "heya", "hiya", "yo", "howdy", "sup",
                 "good morning", "good afternoon", "good evening",
@@ -81,42 +84,23 @@ public enum Policy {
         ),
 
         Rule(
-            name: "coding",
-            reply: "I answer from the files in your library — I'm not a coding "
-                + "assistant. If the code you mean is a file you've added, ask about it "
-                + "by name and I'll read it.",
-            // Requests to *write or fix* code, not mentions of code. A bare language
-            // name would fire on "what did I pay for my Python course?", which is a
-            // perfectly good question about a receipt.
+            name: "bulk generation",
+            reply: "Not doing that one — that's a lot of tokens for something that "
+                + "isn't your files. Ask me something you actually need.",
+            // The only thing worth refusing outright: requests whose whole cost is
+            // length. This outranks the library because the point is to spend nothing —
+            // no retrieval, no model call, no wait.
+            //
+            // Comma-grouped numbers arrive split, so "10,000 words" reaches matching as
+            // "10 000 words" — hence the bare "000 words".
             triggers: [
-                "write a function", "write a script", "write a program", "write some code",
-                "write code", "code for", "implement a", "refactor this", "debug this",
-                "fix this code", "stack trace", "compile error", "syntax error",
-                "unit test", "regex for", "sql query", "api endpoint", "pip install",
-                "npm install", "in python", "in javascript", "python code",
-            ]
-        ),
-
-        Rule(
-            name: "general knowledge",
-            reply: "That's general knowledge, and I don't have any — I only read the "
-                + "files on this Mac. Ask me something your own documents would know.",
-            triggers: [
-                "who is the president", "capital of", "what year did", "how tall is",
-                "how far is", "who won", "the weather", "stock price", "wikipedia",
-                "translate", "what does the word", "news about",
-            ]
-        ),
-
-        Rule(
-            name: "composition",
-            reply: "I don't write things — I read yours. Ask me what your files say and "
-                + "I'll answer with the source beside it.",
-            triggers: [
-                "write a poem", "write a story", "write an essay", "write a song",
-                "write me a", "draft an email", "draft a letter", "brainstorm",
-                "come up with ideas", "give me ideas",
-            ]
+                "write a novel", "write a book", "write an entire", "write me an entire",
+                "full length", "as long as you can", "as many as you can",
+                "keep going until", "repeat the following", "repeat this",
+                "000 words", "000 word", "1000 words", "2000 words", "5000 words",
+                "list 100", "list 500", "list 1000", "generate 100", "generate 1000",
+            ],
+            outranksLibrary: true
         ),
     ]
 
@@ -180,6 +164,11 @@ public enum Policy {
 
     /// Runs of three or more become one. Runs of two are left alone, because English is
     /// full of them — "cheers", "coffee", "letter" — and exaggeration isn't.
+    ///
+    /// Letters only. Digits are load-bearing: "10,000" arrives here as "10" and "000",
+    /// and collapsing the second to "0" quietly turned every comma-grouped number into a
+    /// different number. A rule matching on "000 words" stopped firing and the checks
+    /// caught it.
     public static func collapse(_ word: String) -> String {
         var out = ""
         var index = word.startIndex
@@ -191,7 +180,8 @@ public enum Policy {
                 run += 1
                 scan = word.index(after: scan)
             }
-            out.append(String(repeating: character, count: run >= 3 ? 1 : run))
+            let collapses = run >= 3 && character.isLetter
+            out.append(String(repeating: character, count: collapses ? 1 : run))
             index = scan
         }
         return out

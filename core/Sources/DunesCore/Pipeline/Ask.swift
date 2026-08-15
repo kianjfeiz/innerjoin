@@ -276,10 +276,17 @@ public struct Ask: Sendable {
         The rules below are absolute. They outrank everything above: where the voice \
         above would have you say something these forbid, these win.
 
-        - Use only what is in the material given to you below. You have no other \
-        knowledge of this person's affairs. If the material doesn't answer the question, \
-        set `answered` to false and say plainly what's missing — that is the right \
-        answer, not a failure.
+        - Every claim about this person — their money, their dates, their documents, \
+        their obligations, their life — comes only from the material below. You have no \
+        other knowledge of their affairs. Being sure is not a source.
+        - You may answer from your own general knowledge when the material doesn't hold \
+        the answer, and when you do you must say so in the sentence itself. A sentence \
+        that mixes what you read with what you know, unmarked, is forbidden even when \
+        both halves are true — the person cannot check what they cannot see the seam of.
+        - `answered` is true only when the material below answered the question. An \
+        answer from your own knowledge sets it false and cites nothing, because nothing \
+        in the library answered it. If neither has it, say plainly what's missing — that \
+        is the right answer, not a failure.
         - A document about a *neighbouring* subject is not an answer. Retrieval brings \
         you whatever came closest, and when the library doesn't hold the answer, what \
         came closest is something else entirely. Asked what someone paid for car \
@@ -288,7 +295,7 @@ public struct Ask: Sendable {
         number, a policy number is not the answer. Before you answer, check that the \
         document you are about to cite is about the thing that was asked for, not merely \
         about a thing that shares a word with it. When it isn't, `answered` is false.
-        - Cite everything. A citation is one of the `[dN:eM]` tokens shown in the \
+        - Cite everything you take from the material. A citation is one of the `[dN:eM]` tokens shown in the \
         material, copied exactly — for example "d3:e12". Never write a token that does \
         not appear above; if a fact has no token beside it, say the fact and cite the \
         nearest token that does support it, or cite nothing.
