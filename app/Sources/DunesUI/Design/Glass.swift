@@ -26,11 +26,9 @@ enum Glass {
     /// belongs to the desktop. `WindowHeight` is what keeps that true through a morph.
 
     enum Radius {
-        /// The window itself. Large, so the panel reads as a single soft object.
+        /// The app's outer edge, and the only rounded rectangle at this scale. Large,
+        /// so the panel reads as a single soft object.
         static let panel: CGFloat = 26
-        /// The frame around it. Concentric with the panel — the panel's radius plus
-        /// the band between them — so the two curves nest instead of fighting.
-        static let frame: CGFloat = panel + Space.band
         static let field: CGFloat = 14
         static let control: CGFloat = 10
         static let pill: CGFloat = 999
@@ -41,12 +39,12 @@ enum Glass {
         static let tight: CGFloat = 6
         static let snug: CGFloat = 10
         static let inner: CGFloat = 14
-        static let edge: CGFloat = 22
+        /// How far the content sits from the app's edge. It went up when the band of
+        /// glass around the panel came off: that band was reading as breathing room as
+        /// well as as a frame, and taking it away without giving the inset back would
+        /// have left the wordmark crowding the corner.
+        static let edge: CGFloat = 26
         static let gap: CGFloat = 18
-        /// The thickness of the glass frame the panel sits in. Thick enough to read as
-        /// a body of glass with a near and a far surface — thinner and it flattens
-        /// into a stroke, which is the difference between a lens and a border.
-        static let band: CGFloat = 15
     }
 
     // MARK: - Type
@@ -267,81 +265,6 @@ struct WindowHeight: ViewModifier, @MainActor Animatable {
                 window.invalidateShadow()
             }
         }
-    }
-}
-
-// MARK: - The frame
-
-/// The band of glass the panel sits in — the app's outer edge.
-///
-/// It is thick glass rather than a border: a lens gathers light along its rim, goes
-/// briefly dark where the surface curves away from you, and throws a sheen across the
-/// shoulder it faces the light with. Those three things, layered over real Liquid
-/// Glass, are what make an edge read as *depth* rather than as a drawn line.
-///
-/// It also gives that band something to be. Empty padding is not hit-tested and holds
-/// no pixels of its own, so clicks fell through it to the desktop; a surface here
-/// makes the whole frame part of the app.
-struct WindowGlass: View {
-    @Environment(\.colorScheme) private var scheme
-
-    private var shape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: Glass.Radius.frame, style: .continuous)
-    }
-
-    var body: some View {
-        Color.clear
-            .glassEffect(
-                .regular.tint(Glass.sand.opacity(scheme == .dark ? 0.06 : 0.10)),
-                in: .rect(cornerRadius: Glass.Radius.frame, style: .continuous)
-            )
-            // The rim gathers light: a wide, soft band just inside the outer edge,
-            // where a thick curved surface concentrates what passes through it.
-            .overlay(
-                shape
-                    .strokeBorder(Color.white.opacity(scheme == .dark ? 0.16 : 0.32),
-                                  lineWidth: 8)
-                    .blur(radius: 6)
-                    .allowsHitTesting(false)
-            )
-            // The bevel. Brightest along the top, where light falls, and lit again
-            // along the bottom where it bounces back up through the glass.
-            .overlay(
-                shape.strokeBorder(
-                    LinearGradient(
-                        stops: [
-                            .init(color: .white.opacity(scheme == .dark ? 0.5 : 0.95), location: 0),
-                            .init(color: .white.opacity(scheme == .dark ? 0.08 : 0.16), location: 0.5),
-                            .init(color: .white.opacity(scheme == .dark ? 0.28 : 0.6), location: 1),
-                        ],
-                        startPoint: .top, endPoint: .bottom
-                    ),
-                    lineWidth: 1
-                )
-                .allowsHitTesting(false)
-            )
-            // No line is drawn on the band's inner edge, and that is the whole
-            // discipline here. A lens wants a far surface, and the obvious way to get
-            // one is to stroke it — but the panel already draws its own edge a pixel
-            // away, so any stroke here lands beside that one and the eye reads two
-            // rings where there is one object. The depth comes from the gradient
-            // instead: the rim glow above falls off across the band, and the panel's
-            // shadow darkens its inner end. Same falloff, no second outline.
-            //
-            // The sheen: one soft diagonal fall across the upper shoulder. A lens has
-            // a highlight, and it is never centred.
-            .overlay(
-                LinearGradient(
-                    stops: [
-                        .init(color: .white.opacity(scheme == .dark ? 0.1 : 0.16), location: 0),
-                        .init(color: .clear, location: 0.42),
-                    ],
-                    startPoint: .topLeading, endPoint: .bottomTrailing
-                )
-                .clipShape(shape)
-                .allowsHitTesting(false)
-            )
-            .clipShape(shape)
     }
 }
 
