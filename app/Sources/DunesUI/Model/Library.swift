@@ -179,8 +179,8 @@ final class Library: @unchecked Sendable {
                     let settings = providerSettings()
                     guard settings.apiKey?.isEmpty == false else {
                         continuation.yield(.text(
-                            "No model is connected, so I can search but not answer.\n\n"
-                            + "Add a key in Terminal with `dunes key set openrouter`, then ask again."))
+                            "I can search your files but I can't answer right now — "
+                            + "there's no model connected to this build."))
                         continuation.yield(.done)
                         continuation.finish()
                         return
@@ -225,18 +225,17 @@ final class Library: @unchecked Sendable {
         let quote: String
     }
 
-    /// The environment wins, so the harness can point at any model; otherwise the one the
-    /// engine is currently tuned against. A Settings surface replaces this default later.
+    /// Where the app gets its credential, which is not from the person using it.
     ///
-    /// Read once per launch and kept.
+    /// Model calls are the product's to make, so there is no key of theirs to find. In
+    /// order: the environment, for the harness and for a developer running from source;
+    /// then `DUNESAPIKey` in the bundle's Info.plist, which is where a build carries the
+    /// credential it ships with. The login keychain is not consulted at all — see
+    /// `ProviderSettings.fromEnvironment(_:keychain:)` for why that lookup was doing
+    /// nothing but producing password dialogs.
     ///
-    /// Resolving these reaches into the keychain for the API key, and the keychain asks
-    /// the user for permission per *reading process*, not per read — so doing it inside
-    /// `answer` put a password dialog in front of somebody every single time they asked
-    /// a question. The answer to a question they had already granted.
-    ///
-    /// The failed case is cached too. A denied read that retries is a dialog that comes
-    /// back, which is worse than the first one.
+    /// Read once per launch and kept, failures included: a lookup that retries is a
+    /// question asked twice.
     private func providerSettings() -> ProviderSettings {
         settingsLock.lock()
         defer { settingsLock.unlock() }
@@ -246,7 +245,12 @@ final class Library: @unchecked Sendable {
             environment["DUNES_PROVIDER"] = "openrouter"
             environment["DUNES_MODEL"] = environment["DUNES_MODEL"] ?? "openai/gpt-5.6-luna"
         }
-        let settings = ProviderSettings.fromEnvironment(environment)
+        if environment["DUNES_API_KEY"] == nil,
+           let bundled = Bundle.main.object(forInfoDictionaryKey: "DUNESAPIKey") as? String,
+           !bundled.isEmpty {
+            environment["DUNES_API_KEY"] = bundled
+        }
+        let settings = ProviderSettings.fromEnvironment(environment, keychain: false)
         cachedSettings = settings
         return settings
     }

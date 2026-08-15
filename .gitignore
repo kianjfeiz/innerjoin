@@ -6,3 +6,5 @@
 .build/
 core/.build/
 core/.swiftpm/
+.env.local
+app/.env.local

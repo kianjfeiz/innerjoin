@@ -22,8 +22,6 @@ final class SignIn: NSObject {
         /// Email, then password. Two fields on one screen ask a person to think about
         /// both at once; one at a time is how every good sign-in reads.
         case email(EmailStage)
-        /// Asking the keychain, once, with the reason on screen.
-        case connecting
         case done
     }
 
@@ -53,7 +51,6 @@ final class SignIn: NSObject {
         switch name {
         case "email":    step = .email(.address)
         case "password": address = "you@example.com"; step = .email(.choosePassword)
-        case "connect":  step = .connecting
         default:         break
         }
     }
@@ -263,24 +260,8 @@ final class SignIn: NSObject {
             problem = "Couldn't save who you are: \(error.localizedDescription)"
             return
         }
-        step = .connecting
-    }
-
-    /// The keychain, once, while the reason is on screen.
-    ///
-    /// The API key lives in the keychain, and macOS asks permission per process that
-    /// reads it. Left to happen on its own, that dialog lands in the middle of somebody
-    /// typing a question — the worst possible moment and no explanation attached. Doing
-    /// it here means the prompt arrives while the screen is explaining it, and
-    /// "Always Allow" answers it for good.
-    func connectModel() async {
-        busy = true
-        _ = ProviderSettings.fromEnvironment().apiKey
-        busy = false
         complete()
     }
-
-    func skipModel() { complete() }
 
     private func complete() {
         guard let account = AccountStore.load(from: workspace) else { return }

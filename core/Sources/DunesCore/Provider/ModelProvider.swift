@@ -117,10 +117,21 @@ public struct ProviderSettings: Sendable {
     ///   DUNES_PROVIDER   anthropic | openai | mock        (default: anthropic)
     ///   DUNES_MODEL      model identifier
     ///   DUNES_BASE_URL   override, e.g. http://localhost:11434/v1 for Ollama
-    ///   DUNES_API_KEY    the key; if unset, the Keychain is tried
-    public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment)
-        -> ProviderSettings
-    {
+    ///   DUNES_API_KEY    the key; if unset and `keychain` is on, the Keychain is tried
+    ///
+    /// `keychain` is on for the CLI, where `dunes key set` is a developer keeping their
+    /// own key on their own machine, and off for the app.
+    ///
+    /// The app doesn't ask because the app has nothing to ask about: model calls are the
+    /// product's to make, not the person's to pay for, so there is no key of theirs to
+    /// read. Leaving the lookup in was worse than useless — macOS grants keychain access
+    /// per code identity, an ad-hoc signed build has a new identity every time it is
+    /// compiled, and so "Always Allow" was answered honestly and invalidated by the next
+    /// build. A permission dialog for a credential the app doesn't want.
+    public static func fromEnvironment(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment,
+        keychain: Bool = true
+    ) -> ProviderSettings {
         let name = (environment["DUNES_PROVIDER"] ?? "anthropic").lowercased()
         let kind: Kind = switch name {
         case "mock": .mock
@@ -153,7 +164,7 @@ public struct ProviderSettings: Sendable {
             }
         }
 
-        let key = environment["DUNES_API_KEY"] ?? Keychain.read(account: name)
+        let key = environment["DUNES_API_KEY"] ?? (keychain ? Keychain.read(account: name) : nil)
         return ProviderSettings(
             kind: kind,
             model: environment["DUNES_MODEL"] ?? defaultModel,

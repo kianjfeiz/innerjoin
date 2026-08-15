@@ -14,8 +14,19 @@
 #   DUNES_STATE=loading ./run.sh         any harness state — see Harness in DunesApp
 #   DUNES_TODAY=2026-08-10 ./run.sh      a pinned clock
 #   DUNES_APPEARANCE=dark ./run.sh       force an appearance, this process only
+#   DUNES_VOICE=~/voice.txt ./run.sh     try a different voice, no rebuild
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# A place to keep a model key while working from source, so the dev loop needs no
+# keychain and no prompt. Gitignored, never read by the shipped app — a build carries its
+# credential in Info.plist as DUNESAPIKey instead.
+#
+#   echo 'export DUNES_API_KEY=sk-...' > app/.env.local
+if [ -f .env.local ]; then
+    # shellcheck disable=SC1091
+    . ./.env.local
+fi
 
 CONFIG="${CONFIG:-debug}"
 APP=".build/dunes.app"

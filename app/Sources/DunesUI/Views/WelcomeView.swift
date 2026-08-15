@@ -18,7 +18,6 @@ struct WelcomeView: View {
             switch model.step {
             case .welcome:      Doors(model: model)
             case .email:        EmailFlow(model: model)
-            case .connecting:   ConnectModel(model: model)
             case .done:         Color.clear
             }
 
@@ -174,61 +173,6 @@ private struct Field: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: Glass.Radius.field, style: .continuous))
         .animation(Glass.Motion.touch, value: focused.wrappedValue)
-    }
-}
-
-// MARK: - The one permission worth asking for on purpose
-
-/// The keychain prompt, at a moment that explains itself.
-///
-/// macOS asks per process that reads a keychain item, and left alone that dialog arrives
-/// mid-question with no context — which is exactly when a person clicks Deny to make it
-/// go away. Asked here, with the reason on screen, "Always Allow" is the obvious answer
-/// and it is the last time anyone sees it.
-private struct ConnectModel: View {
-    @Bindable var model: SignIn
-
-    private static let explanation: AttributedString = {
-        let markdown = "Answering questions needs the model key you stored with "
-            + "`dunes key set`. macOS will ask whether dunes may read it — choose "
-            + "**Always Allow** and it won't ask again."
-        return (try? AttributedString(markdown: markdown)) ?? AttributedString(markdown)
-    }()
-
-    var body: some View {
-        VStack(spacing: Glass.Space.inner) {
-            Image(systemName: "key")
-                .font(.system(size: 20, weight: .light))
-                .foregroundStyle(Glass.Ink.secondary)
-                .arrives(0)
-
-            VStack(spacing: 6) {
-                Text("One permission, once")
-                    .font(Glass.Font.prompt)
-                    .foregroundStyle(Glass.Ink.primary)
-                    .arrives(1)
-                // Built as an AttributedString rather than concatenated: `Text` only
-                // reads markdown out of a literal, so a string joined with + renders
-                // its own backticks and asterisks at the reader.
-                Text(Self.explanation)
-                    .font(Glass.Font.footnote)
-                    .foregroundStyle(Glass.Ink.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 340)
-                    .arrives(2)
-            }
-
-            HStack(spacing: Glass.Space.tight) {
-                PanelButton(title: "Not now") { model.skipModel() }
-                PanelButton(title: model.busy ? "Waiting…" : "Grant access",
-                            icon: "checkmark", wide: true) {
-                    Task { await model.connectModel() }
-                }
-                .disabled(model.busy)
-            }
-            .frame(maxWidth: 300)
-            .arrives(3)
-        }
     }
 }
 
