@@ -11,6 +11,8 @@ struct Panel: View {
 
     /// How tall the glass draws — not how tall the window is, which never changes.
     private var glassHeight: CGFloat {
+        // A document needs room whatever the panel was doing a moment ago.
+        if model.preview != nil { return Glass.openSize.height }
         if model.needsSignIn { return Glass.welcomeSize.height }
         return model.mode == .ask ? Glass.restSize.height : Glass.openSize.height
     }
@@ -25,6 +27,11 @@ struct Panel: View {
             // exactly the lurch this panel used to have.
             ZStack {
                 switch model.mode {
+                case _ where model.preview != nil:
+                    if let preview = model.preview {
+                        PreviewView(preview: preview) { model.closePreview() }
+                            .transition(Glass.Motion.handoff)
+                    }
                 case _ where model.needsSignIn:
                     if let signIn = model.signIn {
                         WelcomeView(model: signIn)
@@ -103,6 +110,7 @@ struct Panel: View {
         // glass no longer has to make up for it.
         .modifier(WindowHeight(glassHeight))
         .animation(Glass.Motion.morph, value: model.mode)
+        .animation(Glass.Motion.morph, value: model.preview)
         .onAppear { fieldFocused = true }
         // Escape always returns to the resting panel. One way out of everything.
         .background {

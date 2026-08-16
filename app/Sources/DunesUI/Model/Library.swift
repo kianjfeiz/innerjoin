@@ -192,7 +192,8 @@ final class Library: @unchecked Sendable {
                         continuation.yield(.citation(
                             Citation(tag: citation.elementTag,
                                      document: citation.documentLabel,
-                                     quote: citation.quote)))
+                                     quote: citation.quote,
+                                     documentID: citation.documentID)))
                     }
                     continuation.yield(.done)
                 } catch {
@@ -217,6 +218,40 @@ final class Library: @unchecked Sendable {
         let tag: String
         let document: String
         let quote: String
+        /// Which document it points at, so the citation can be opened rather than only
+        /// read. Without this a source is a label; with it, it's a door.
+        let documentID: Int64
+    }
+
+    /// A document, as something to look at.
+    ///
+    /// The markdown rendition rather than the original bytes: it is what the model was
+    /// actually shown, so a person checking a citation sees the same text the answer was
+    /// built from — which is the only version where checking means anything. The original
+    /// file is one button away for when they want the real thing.
+    struct Preview: Identifiable, Equatable, Sendable {
+        let id: Int64
+        let name: String
+        let text: String
+        let file: URL?
+        /// The element the citation pointed at, so the preview can open on it.
+        let focus: String?
+    }
+
+    func preview(documentID: Int64, focus: String?) async throws -> Preview? {
+        let store = try open()
+        guard let document = try store.document(id: documentID) else { return nil }
+        let file = store.vault.url(for: document.vaultPath)
+        let text = try document.markdown ?? store.elements(of: documentID)
+            .map(\.text)
+            .joined(separator: "\n\n")
+        return Preview(
+            id: documentID,
+            name: document.displayName ?? document.name,
+            text: text,
+            file: FileManager.default.fileExists(atPath: file.path) ? file : nil,
+            focus: focus
+        )
     }
 
     /// Where the app gets its credential, which is not from the person using it.

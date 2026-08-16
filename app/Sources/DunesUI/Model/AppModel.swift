@@ -75,6 +75,14 @@ final class AppModel {
 
     private var undoTimer: Task<Void, Never>?
 
+    /// The document being looked at, if any.
+    ///
+    /// Kept beside the mode rather than inside it. A preview is something opened *over*
+    /// what you were doing and closed to get back to it — folding it into `Mode` would
+    /// mean every branch of the panel had to know how to restore a question it never
+    /// asked.
+    private(set) var preview: Library.Preview?
+
     var draft = ""
 
     /// Who this library belongs to, or nil until somebody says. The panel shows the way
@@ -120,6 +128,20 @@ final class AppModel {
         account = nil
         dismiss()
         beginSignIn()
+    }
+
+    // MARK: - Looking at a document
+
+    func openPreview(for citation: Library.Citation) {
+        Task { [library] in
+            guard let found = try? await library.preview(documentID: citation.documentID,
+                                                         focus: citation.tag) else { return }
+            withAnimation(Glass.Motion.morph) { preview = found }
+        }
+    }
+
+    func closePreview() {
+        withAnimation(Glass.Motion.morph) { preview = nil }
     }
 
     // MARK: - Asking
@@ -271,6 +293,7 @@ final class AppModel {
     /// `ask` and `browse` replace them on the way in; the cancel stops a stale stream
     /// from narrating to nobody.
     func dismiss() {
+        if preview != nil { return closePreview() }
         answerTask?.cancel()
         undoTimer?.cancel()
         undoable = nil

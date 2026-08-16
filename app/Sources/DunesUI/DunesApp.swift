@@ -59,6 +59,7 @@ struct DunesApp: App {
 ///     DUNES_APPEARANCE=dark ./run.sh       force an appearance, this process only
 ///     DUNES_ASK="…" ./run.sh               ask on launch, so the answer path renders
 ///     DUNES_BROWSE=people ./run.sh         open straight into a list
+///     DUNES_PREVIEW=1 ./run.sh             open the first source the answer cites
 ///     DUNES_AFTER=5 ./run.sh               hold the launch state back, so a camera
 ///                                          outside the process can catch the morph
 ///     DUNES_SHOT=/path.png ./shot.sh       render, photograph itself, exit
@@ -134,6 +135,18 @@ enum Harness {
             model.ask(question)
         } else if let raw = environment["DUNES_BROWSE"], let scope = Mode.Scope(rawValue: raw) {
             model.browse(scope)
+        }
+        // DUNES_PREVIEW opens the first source the answer cites, once it has one. The
+        // preview is two states past launch — ask, wait, click — which makes it exactly
+        // the kind of thing nobody photographs by hand and therefore nobody checks.
+        if environment["DUNES_PREVIEW"] != nil {
+            for _ in 0..<120 {
+                if let first = model.turn?.citations.first {
+                    model.openPreview(for: first)
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
         }
         // DUNES_RETURN comes back to the resting panel that many seconds later. The
         // shape a panel is left in *after* a morph is a different thing from the shape

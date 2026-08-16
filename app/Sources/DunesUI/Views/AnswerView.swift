@@ -32,7 +32,7 @@ struct AnswerView: View {
                     }
 
                     if !turn.citations.isEmpty {
-                        Sources(citations: turn.citations)
+                        Sources(citations: turn.citations) { model.openPreview(for: $0) }
                             .transition(Glass.Motion.settle(from: 4))
                     }
                 }
@@ -89,68 +89,5 @@ private struct WorkingNote: View {
         // step — it also holds the first note back until the question has landed.
         .transition(Glass.Motion.settle(after: 0.3))
         .id(text)
-    }
-}
-
-/// Citations as objects you can look at, not footnote numbers. Every one resolved to a
-/// real element of a real document before it got here — `Ask` drops the rest.
-private struct Sources: View {
-    let citations: [Library.Citation]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: Glass.Space.tight) {
-            Text("FROM")
-                .font(.system(size: 9.5, weight: .semibold))
-                .tracking(0.8)
-                .foregroundStyle(Glass.Ink.faint)
-
-            ForEach(Array(citations.enumerated()), id: \.element.id) { index, citation in
-                SourceChip(citation: citation).arrives(min(index, 6))
-            }
-        }
-    }
-}
-
-private struct SourceChip: View {
-    let citation: Library.Citation
-
-    @Environment(\.colorScheme) private var scheme
-    @State private var hovering = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(citation.tag)
-                    .font(Glass.Font.mono)
-                    .foregroundStyle(Glass.Ink.tertiary)
-                Text(citation.document)
-                    .font(Glass.Font.control)
-                    .foregroundStyle(Glass.Ink.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            // The actual text at that anchor. A citation you can read is a citation you
-            // can check without leaving the panel.
-            if hovering, !citation.quote.isEmpty {
-                Text(citation.quote)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Glass.Ink.secondary)
-                    .lineLimit(3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .transition(.opacity)
-            }
-        }
-        .padding(.horizontal, Glass.Space.snug)
-        .padding(.vertical, 7)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(hovering ? Glass.Fill.controlHover(scheme) : Glass.Fill.control(scheme))
-        .overlay(
-            RoundedRectangle(cornerRadius: Glass.Radius.control, style: .continuous)
-                .strokeBorder(Glass.Fill.rim(scheme), lineWidth: 0.5)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: Glass.Radius.control, style: .continuous))
-        .animation(Glass.Motion.arrive, value: hovering)
-        .onHover { hovering = $0 }
-        .accessibilityLabel("\(citation.document), at \(citation.tag)")
     }
 }
