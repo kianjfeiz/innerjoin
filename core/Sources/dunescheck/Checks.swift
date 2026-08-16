@@ -55,6 +55,7 @@ struct Checks {
         await askChecks()
         await voiceChecks()
         await markupChecks()
+        await mcpChecks()
         await peopleChecks()
         await nicknameDataChecks()
         await scrutinyChecks()

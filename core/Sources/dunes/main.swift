@@ -10,7 +10,8 @@ struct IJParse: AsyncParsableCommand {
         subcommands: [Add.self, Show.self, List.self, Find.self,
                       Understand.self, Record.self, Upcoming.self, Tasks.self, Who.self,
                       Graph.self, Tidy.self, Sort.self, Settle.self, Name.self,
-                      Ask.self, Problems.self, Key.self, ShowPrompt.self],
+                      Ask.self, Problems.self, Key.self, ShowPrompt.self,
+                      MCPCommand.self],
         defaultSubcommand: Add.self
     )
 }
@@ -839,4 +840,149 @@ struct ShowPrompt: ParsableCommand {
     func run() throws {
         print(voiceOnly ? Voice.instructions : DunesCore.Ask.system)
     }
+}
+
+// MARK: - mcp
+
+/// Connect to MCP servers.
+///
+/// Servers are written down in `mcp.json` inside the workspace, in the same shape every
+/// other MCP client uses, so a server already configured elsewhere can be pasted in
+/// whole:
+///
+///     {
+///       "mcpServers": {
+///         "gmail": {
+///           "command": "npx",
+///           "args": ["-y", "@some/gmail-mcp-server"],
+///           "env": { "GMAIL_CREDENTIALS": "~/.gmail/credentials.json" }
+///         }
+///       }
+///     }
+struct MCPCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "mcp",
+        abstract: "Connect to MCP servers and pull what they hold into the library.",
+        subcommands: [MCPServers.self, MCPTools.self, MCPCall.self, MCPPull.self],
+        defaultSubcommand: MCPServers.self)
+}
+
+struct MCPServers: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "servers", abstract: "List the servers in mcp.json.")
+
+    @OptionGroup var workspace: WorkspaceOption
+
+    func run() throws {
+        let configuration = try MCP.Configuration.load(from: workspace.url)
+        guard !configuration.servers.isEmpty else {
+            print("No servers. Write them in \(MCP.Configuration.url(in: workspace.url).path):")
+            print("""
+
+              {
+                "mcpServers": {
+                  "gmail": { "command": "npx", "args": ["-y", "<a-gmail-mcp-server>"] }
+                }
+              }
+
+            """)
+            return
+        }
+        for (name, server) in configuration.servers.sorted(by: { $0.key < $1.key }) {
+            print("  \(name)  \(([server.command] + server.args).joined(separator: " "))")
+        }
+    }
+}
+
+struct MCPTools: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "tools", abstract: "Ask a server what it can do.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Argument(help: "Server name, as written in mcp.json.") var server: String
+    @Flag(help: "Print each tool's input schema.") var schema = false
+
+    func run() throws {
+        let client = try connect(server, in: workspace.url)
+        defer { client.stop() }
+        let tools = try client.tools()
+        guard !tools.isEmpty else { return print("  no tools") }
+        for tool in tools {
+            print("  \(tool.name)")
+            if !tool.description.isEmpty {
+                print("      \(tool.description.replacingOccurrences(of: "\n", with: " "))")
+            }
+            if schema { print(tool.schema.split(separator: "\n").map { "      \($0)" }.joined(separator: "\n")) }
+        }
+    }
+}
+
+struct MCPCall: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "call", abstract: "Call one tool and print what comes back.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Argument(help: "Server name.") var server: String
+    @Argument(help: "Tool name.") var tool: String
+    @Option(name: .long, help: "Arguments as a JSON object.") var args: String = "{}"
+
+    func run() throws {
+        let client = try connect(server, in: workspace.url)
+        defer { client.stop() }
+        print(try client.call(tool, arguments: arguments(args)).text)
+    }
+}
+
+/// Pull what a tool returns into the library.
+///
+/// Each text item becomes a markdown file under `mcp/<server>/` in the workspace and then
+/// goes through the ordinary reader, so what arrives is a document like any other — same
+/// extraction, same anchors, same citations. Ingest hashes contents, so pulling twice
+/// adds nothing the second time.
+struct MCPPull: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "pull", abstract: "Call a tool and read the result into the library.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Argument(help: "Server name.") var server: String
+    @Argument(help: "Tool name.") var tool: String
+    @Option(name: .long, help: "Arguments as a JSON object.") var args: String = "{}"
+    @Flag(help: "Write the files but don't add them to the library.") var dryRun = false
+
+    mutating func run() async throws {
+        let client = try connect(server, in: workspace.url)
+        defer { client.stop() }
+
+        let result = try client.call(tool, arguments: arguments(args))
+        let drafts = MCP.drafts(from: result, server: server, tool: tool)
+        guard !drafts.isEmpty else { return print("  nothing came back") }
+
+        let written = try MCP.write(drafts, for: server, in: workspace.url)
+        print("  wrote \(written.count) file\(written.count == 1 ? "" : "s") to "
+              + MCP.folder(for: server, in: workspace.url).path)
+        guard !dryRun else { return }
+
+        let ingest = Ingest(store: try workspace.open())
+        var added = 0, already = 0
+        for url in written {
+            let outcome = try await ingest.add(fileAt: url)
+            outcome.wasAlreadyPresent ? (already += 1) : (added += 1)
+            print("  \(outcome.wasAlreadyPresent ? "already have" : "read        ") \(outcome.document.name)")
+        }
+        print("\n  \(added) added, \(already) already there. Run `dunes understand` to read them properly.")
+    }
+}
+
+private func connect(_ name: String, in workspace: URL) throws -> MCPClient {
+    let configuration = try MCP.Configuration.load(from: workspace)
+    guard let server = configuration.servers[name] else {
+        throw MCP.Failure.noSuchServer(name)
+    }
+    let client = MCPClient(name: name, config: server)
+    try client.start()
+    return client
+}
+
+private func arguments(_ json: String) -> [String: Any] {
+    (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
 }
