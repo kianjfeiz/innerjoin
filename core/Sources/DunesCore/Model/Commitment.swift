@@ -184,3 +184,57 @@ extension TaskState: FetchableRecord, PersistableRecord {
         public static let snoozedUntil = Column("snoozedUntil")
     }
 }
+
+// MARK: - Mail
+
+/// Where a mailbox got to.
+///
+/// One row per address, holding Gmail's `historyId` — a cursor into the mailbox. It is
+/// the whole of what makes syncing persistent: with it, a run costs one request plus
+/// whatever is new; without it, every run is a walk of the mailbox.
+public struct Mailbox: Codable, Equatable, Sendable {
+    public var address: String
+    public var historyID: String
+    public var syncedAt: Date
+
+    public init(address: String, historyID: String, syncedAt: Date = Date()) {
+        self.address = address
+        self.historyID = historyID
+        self.syncedAt = syncedAt
+    }
+}
+
+extension Mailbox: FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "mailbox"
+    public enum Columns {
+        public static let address = Column("address")
+    }
+}
+
+/// A message already seen.
+///
+/// Keyed by Gmail's own id rather than by content hash. Ingest dedups on contents, which
+/// is right for files and wrong for mail: a thread that grows by one reply is a different
+/// hash and the same conversation, so hashing alone would file it again every time
+/// somebody answers.
+public struct MailMessage: Codable, Equatable, Sendable {
+    public var id: String
+    public var address: String
+    public var documentID: Int64?
+    public var seenAt: Date
+
+    public init(id: String, address: String, documentID: Int64? = nil, seenAt: Date = Date()) {
+        self.id = id
+        self.address = address
+        self.documentID = documentID
+        self.seenAt = seenAt
+    }
+}
+
+extension MailMessage: FetchableRecord, PersistableRecord {
+    public static let databaseTableName = "mailMessage"
+    public enum Columns {
+        public static let id = Column("id")
+        public static let address = Column("address")
+    }
+}

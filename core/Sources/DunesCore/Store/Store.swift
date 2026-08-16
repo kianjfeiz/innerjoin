@@ -265,6 +265,25 @@ public final class Store: Sendable {
             try db.create(indexOn: "taskState", columns: ["doneAt"])
         }
 
+        // Mail is the first source that arrives on its own rather than being handed
+        // over, so it needs two things files never did: somewhere to remember how far it
+        // has got, and a record of what it has already seen that survives the message
+        // changing underneath it.
+        m.registerMigration("v10_mail_sync") { db in
+            try db.create(table: "mailbox") { t in
+                t.primaryKey("address", .text)
+                t.column("historyID", .text).notNull()
+                t.column("syncedAt", .datetime).notNull()
+            }
+            try db.create(table: "mailMessage") { t in
+                t.primaryKey("id", .text)
+                t.column("address", .text).notNull()
+                t.column("documentID", .integer)
+                t.column("seenAt", .datetime).notNull()
+            }
+            try db.create(indexOn: "mailMessage", columns: ["address"])
+        }
+
         return m
     }
 
@@ -694,6 +713,37 @@ public final class Store: Sendable {
     // MARK: - What the reader decided
 
     /// Every decision a person has made, by commitment key.
+    // MARK: - Mail
+
+    public func mailbox(_ address: String) throws -> Mailbox? {
+        try dbQueue.read { db in try Mailbox.fetchOne(db, key: address) }
+    }
+
+    public func rememberMailbox(_ mailbox: Mailbox) throws {
+        try dbQueue.write { db in try mailbox.save(db) }
+    }
+
+    /// Which of these have been read already. Asked in one query rather than one per
+    /// message: a history page can name a few hundred, and most syncs find nothing new.
+    public func knownMailMessages(_ ids: [String]) throws -> Set<String> {
+        guard !ids.isEmpty else { return [] }
+        return try dbQueue.read { db in
+            Set(try String.fetchAll(db,
+                sql: "SELECT id FROM mailMessage WHERE id IN (\(databaseQuestionMarks(count: ids.count)))",
+                arguments: StatementArguments(ids)))
+        }
+    }
+
+    public func rememberMailMessage(_ message: MailMessage) throws {
+        try dbQueue.write { db in try message.save(db) }
+    }
+
+    public func mailCount(for address: String) throws -> Int {
+        try dbQueue.read { db in
+            try MailMessage.filter(MailMessage.Columns.address == address).fetchCount(db)
+        }
+    }
+
     public func taskStates() throws -> [String: TaskState] {
         try dbQueue.read { db in
             let states = try TaskState.fetchAll(db)

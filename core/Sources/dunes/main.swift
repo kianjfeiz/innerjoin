@@ -11,7 +11,7 @@ struct IJParse: AsyncParsableCommand {
                       Understand.self, Record.self, Upcoming.self, Tasks.self, Who.self,
                       Graph.self, Tidy.self, Sort.self, Settle.self, Name.self,
                       Ask.self, Problems.self, Key.self, ShowPrompt.self,
-                      MCPCommand.self],
+                      MCPCommand.self, Mail.self],
         defaultSubcommand: Add.self
     )
 }
@@ -985,4 +985,41 @@ private func connect(_ name: String, in workspace: URL) throws -> MCPClient {
 
 private func arguments(_ json: String) -> [String: Any] {
     (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
+}
+
+// MARK: - mail
+
+/// Sync a Gmail mailbox into the library.
+///
+/// The credential that mints access tokens lives on the backend, not here — see
+/// `MailAccess`. This needs `DUNES_BACKEND_URL` and a bearer for it; the mail itself is
+/// fetched straight from Google by this machine and never passes through anything else.
+struct Mail: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "mail",
+        abstract: "Read a connected mailbox into the library.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Option(name: .long, help: "Which linked account to sync.") var account: String = "default"
+    @Option(name: .long, help: "Gmail search to backfill with.")
+    var query: String = MailSync.defaultQuery
+    @Option(name: .long, help: "Most messages to read on a first sync.") var limit: Int = 200
+
+    mutating func run() async throws {
+        guard let base = BackendMailAccess.baseURL() else { throw HTTPFailure.noBackend }
+        guard let bearer = ProcessInfo.processInfo.environment["DUNES_BACKEND_TOKEN"],
+              !bearer.isEmpty else {
+            throw HTTPFailure.status(401, "set DUNES_BACKEND_TOKEN to whatever signs you in")
+        }
+
+        let store = try workspace.open()
+        let access = BackendMailAccess(base: base, bearer: bearer, account: account)
+        let sync = MailSync(store: store, gmail: Gmail(access: access), workspace: workspace.url)
+
+        let report = try await sync.run(query: query, limit: limit, ingest: Ingest(store: store))
+        print("  \(report.address): \(report.summary)")
+        if report.added > 0 {
+            print("\n  Run `dunes understand` to read them properly.")
+        }
+    }
 }

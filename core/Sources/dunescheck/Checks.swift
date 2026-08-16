@@ -56,6 +56,7 @@ struct Checks {
         await voiceChecks()
         await markupChecks()
         await mcpChecks()
+        await mailChecks()
         await peopleChecks()
         await nicknameDataChecks()
         await scrutinyChecks()
@@ -83,10 +84,16 @@ struct Checks {
 
 /// A throwaway workspace per check, removed afterwards.
 func withWorkspace<T>(_ body: (Store) async throws -> T) async throws -> T {
+    try await withWorkspace { store, _ in try await body(store) }
+}
+
+/// The same, for anything that writes files beside the database — mail, MCP pulls —
+/// and so needs to know where the workspace actually is.
+func withWorkspace<T>(_ body: (Store, URL) async throws -> T) async throws -> T {
     let root = URL(fileURLWithPath: NSTemporaryDirectory())
         .appendingPathComponent("ij-check-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
-    return try await body(try Store(root: root))
+    return try await body(try Store(root: root), root)
 }
 
 func fixture(_ name: String) throws -> URL {
