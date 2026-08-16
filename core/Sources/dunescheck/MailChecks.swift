@@ -19,6 +19,72 @@ func mailChecks() async {
     await check("a token that expires mid-sync is refreshed once", tokenRefresh)
     await check("the first run backfills and the second costs nothing", twoRuns)
     await check("a forgotten cursor falls back to search without re-reading", restartSkipsKnown)
+    await check("the sign-in asks for a refresh token, not just an hour", authorizationURL)
+    await check("PKCE derives the challenge Google will check", pkce)
+    await check("the code is read out of whatever the browser asks for", callbackParsing)
+    await check("a rotated refresh token is kept", credentialsRoundTrip)
+}
+
+/// Two parameters people forget, and the failure is delayed: everything works for an hour
+/// and then the connection is simply gone, with no error anyone saw.
+private func authorizationURL() async throws {
+    let url = GoogleOAuth.authorizationURL(clientID: "abc", redirect: "http://127.0.0.1:1",
+                                           challenge: "ch", state: "st")
+    let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
+
+    await expectEqual(value("access_type"), "offline", "offline, or there is no refresh token")
+    // After the first grant Google stops issuing refresh tokens unless consent is asked
+    // for again — so reconnecting silently produces a one-hour connection.
+    await expectEqual(value("prompt"), "consent", "and consent, or a reconnect gets none")
+    await expectEqual(value("code_challenge_method"), "S256", "PKCE, not a bare secret")
+    await expectEqual(value("scope"), GoogleOAuth.scope, "read-only and nothing else")
+    await expect(value("scope")?.contains("readonly") == true, "really read-only")
+}
+
+private func pkce() async throws {
+    // The worked example from RFC 7636, so this is checked against the spec rather than
+    // against itself.
+    let pkce = GoogleOAuth.PKCE(verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+    await expectEqual(pkce.challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+                      "the challenge matches the one in RFC 7636")
+
+    let generated = GoogleOAuth.PKCE.generate()
+    await expect(generated.verifier.count >= 43, "a generated verifier is long enough to matter")
+    await expect(!generated.challenge.contains("=") && !generated.challenge.contains("+"),
+                 "and the challenge is base64url, which is what Google will compare")
+}
+
+private func callbackParsing() async throws {
+    let line = "GET /?state=xyz&code=4/abc123&scope=gmail HTTP/1.1"
+    let found = GoogleOAuth.code(inRequestLine: line)
+    await expectEqual(found?.code, "4/abc123", "the code is read")
+    // Without the state check the listener would accept a code from any tab on the
+    // machine that happened to hit the port.
+    await expectEqual(found?.state, "xyz", "and the state that proves it is ours")
+
+    await expect(GoogleOAuth.code(inRequestLine: "GET /favicon.ico HTTP/1.1") == nil,
+                 "a browser asking for a favicon is not a sign-in")
+    await expect(GoogleOAuth.code(inRequestLine: "GET /?error=access_denied HTTP/1.1") == nil,
+                 "and a refusal is not a code")
+}
+
+/// Google rotates refresh tokens occasionally. Dropping the new one works until the old
+/// one stops being accepted — weeks later, for no visible reason.
+private func credentialsRoundTrip() async throws {
+    try await withWorkspace { _, workspace in
+        let original = GoogleOAuth.Credentials(clientID: "id", clientSecret: "secret",
+                                               refreshToken: "old", address: "me@example.com")
+        try original.save(to: workspace)
+
+        let file = GoogleOAuth.Credentials.url(in: workspace)
+        let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions]
+        await expectEqual((mode as? NSNumber)?.intValue, 0o600,
+                          "the file holding a refresh token is readable by nobody else")
+
+        await expectEqual(GoogleOAuth.Credentials.load(from: workspace), original,
+                          "and reads back as it was written")
+    }
 }
 
 // MARK: - A Gmail that does as it's told

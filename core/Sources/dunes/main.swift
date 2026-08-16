@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import ArgumentParser
 import DunesCore
 
@@ -997,7 +998,8 @@ private func arguments(_ json: String) -> [String: Any] {
 struct Mail: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mail",
-        abstract: "Read a connected mailbox into the library.")
+        abstract: "Read a connected mailbox into the library.",
+        subcommands: [MailConnect.self, MailForget.self])
 
     @OptionGroup var workspace: WorkspaceOption
     @Option(name: .long, help: "Which linked account to sync.") var account: String = "default"
@@ -1006,20 +1008,87 @@ struct Mail: AsyncParsableCommand {
     @Option(name: .long, help: "Most messages to read on a first sync.") var limit: Int = 200
 
     mutating func run() async throws {
+        let store = try workspace.open()
+        // A mailbox connected from this machine wins, because if one exists somebody
+        // deliberately connected it here and does not want to be told about a backend.
+        if let credentials = GoogleOAuth.Credentials.load(from: workspace.url) {
+            let access = LocalMailAccess(credentials: credentials, workspace: workspace.url)
+            try await sync(store: store, access: access)
+            return
+        }
         guard let base = BackendMailAccess.baseURL() else { throw HTTPFailure.noBackend }
         guard let bearer = ProcessInfo.processInfo.environment["DUNES_BACKEND_TOKEN"],
               !bearer.isEmpty else {
             throw HTTPFailure.status(401, "set DUNES_BACKEND_TOKEN to whatever signs you in")
         }
 
-        let store = try workspace.open()
-        let access = BackendMailAccess(base: base, bearer: bearer, account: account)
-        let sync = MailSync(store: store, gmail: Gmail(access: access), workspace: workspace.url)
+        try await sync(store: store,
+                       access: BackendMailAccess(base: base, bearer: bearer, account: account))
+    }
 
+    private func sync(store: Store, access: any MailAccess) async throws {
+        let sync = MailSync(store: store, gmail: Gmail(access: access), workspace: workspace.url)
         let report = try await sync.run(query: query, limit: limit, ingest: Ingest(store: store))
         print("  \(report.address): \(report.summary)")
         if report.added > 0 {
             print("\n  Run `dunes understand` to read them properly.")
         }
+    }
+}
+
+/// Connect a Gmail account from this machine.
+///
+/// Needs a Google Cloud project of your own: enable the Gmail API, create an OAuth client
+/// of type *Desktop app*, and add yourself as a test user on the consent screen with the
+/// gmail.readonly scope. That last step is what lets a restricted scope be granted before
+/// the app has been through Google's verification.
+struct MailConnect: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "connect",
+        abstract: "Sign in to Gmail and remember the connection.")
+
+    @OptionGroup var workspace: WorkspaceOption
+    @Option(name: .long, help: "OAuth client id from your Google Cloud project.")
+    var clientID: String
+    @Option(name: .long, help: "OAuth client secret for that client.")
+    var clientSecret: String
+
+    mutating func run() async throws {
+        print("  Opening your browser. Choose the account you want dunes to read.\n")
+        let tokens = try await GoogleOAuth.connect(
+            clientID: clientID,
+            clientSecret: clientSecret,
+            open: { NSWorkspace.shared.open($0) }
+        )
+        var credentials = GoogleOAuth.Credentials(
+            clientID: clientID, clientSecret: clientSecret, refreshToken: tokens.refresh ?? "")
+
+        // Ask Gmail who that was, so the confirmation names the mailbox rather than
+        // claiming success at something unnamed.
+        let access = LocalMailAccess(credentials: credentials, workspace: workspace.url)
+        let profile = try await Gmail(access: access).profile()
+        credentials.address = profile.address
+        try credentials.save(to: workspace.url)
+
+        print("  Connected \(profile.address).")
+        print("  Run `dunes mail` to read it in.")
+    }
+}
+
+/// Forget a connected mailbox. The documents already read stay — they are yours, and
+/// disconnecting an account is not a request to delete your own library.
+struct MailForget: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "forget", abstract: "Disconnect the mailbox, keeping what it read.")
+
+    @OptionGroup var workspace: WorkspaceOption
+
+    func run() throws {
+        let file = GoogleOAuth.Credentials.url(in: workspace.url)
+        guard FileManager.default.fileExists(atPath: file.path) else {
+            return print("  Nothing connected.")
+        }
+        try FileManager.default.removeItem(at: file)
+        print("  Disconnected. The mail already read is still in your library.")
     }
 }
