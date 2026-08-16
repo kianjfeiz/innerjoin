@@ -24,12 +24,7 @@ struct AnswerView: View {
                     }
 
                     if !turn.text.isEmpty {
-                        Text(emphasised(turn.text))
-                            .font(Glass.Font.body)
-                            .foregroundStyle(Glass.Ink.primary)
-                            .lineSpacing(4)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
+                        ReplyText(text: turn.text)
                             // The answer condenses out of a blur, like focus being
                             // pulled — the glassiest thing text can do.
                             .transition(AnyTransition(.blurReplace)
@@ -60,19 +55,6 @@ struct AnswerView: View {
         }
     }
 
-    /// `**36**` becomes bold, and nothing else is styled. An answer full of formatting is
-    /// an answer nobody trusts.
-    private func emphasised(_ text: String) -> AttributedString {
-        var result = AttributedString()
-        var bold = false
-        for piece in text.components(separatedBy: "**") {
-            var run = AttributedString(piece)
-            if bold { run.font = .system(size: 13, weight: .semibold) }
-            result.append(run)
-            bold.toggle()
-        }
-        return result
-    }
 }
 
 /// "Reading 4 documents" — the app saying what it's doing instead of spinning.
